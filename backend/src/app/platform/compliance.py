@@ -734,8 +734,10 @@ _OWASP_WEB: tuple[ControlEntry, ...] = (
             "the same machinery as LLM03, labelled here as the web-surface control."
         ),
         gap=(
-            "No advisory feed and no attestation. CI exists "
-            "(.github/workflows/ci.yml) but gates tests and lint, not the supply chain."
+            "The advisory feed shipped — `app.platform.advisories` queries OSV.dev live "
+            "and `GET /v1/stack/advisories` serves the verdicts. What is still absent is "
+            "attestation: CI (.github/workflows/ci.yml) gates tests and lint, not the "
+            "supply chain, so nothing signs what was built."
         ),
         evidence=[
             _f("backend/uv.lock", "hash-pinned dependency graph"),
@@ -1651,7 +1653,8 @@ _ISO_27001: tuple[ControlEntry, ...] = (
         state=ControlState.PARTIAL,
         summary="Installed versions compared against the live registry, per package, best-effort.",
         gap=(
-            "No advisory feed, so this is patch freshness rather than vulnerability "
+            "The OSV.dev feed shipped (`app.platform.advisories`), but this control is "
+            "still patch freshness rather than enforced vulnerability "
             "management: an up-to-date package with a known CVE reports 'current'."
         ),
         evidence=[
@@ -2037,7 +2040,13 @@ _SOC2: tuple[ControlEntry, ...] = (
             "A single model gateway chokepoint and an explicitly declared, risk-tiered MCP peer "
             "registry."
         ),
-        gap="The unvalidated peer URL recorded under OWASP A01:2025 is the hole in this boundary.",
+        gap=(
+            "The peer URL is validated — `app.mcp.client.validate_peer_url` refuses "
+            "loopback, link-local, private and reserved addresses and non-allowlisted "
+            "schemes at the registry chokepoint. What remains is DNS: a hostname that "
+            "resolves inward still passes, because the guard checks the literal and not "
+            "the resolution."
+        ),
         evidence=[
             _f("backend/src/app/mcp/client.py", "the peer dial"),
             _r("GET /mcp/console", "the declared peers and their tools"),
@@ -3132,7 +3141,9 @@ _FRAMEWORKS: tuple[tuple[str, str, str, str, str, tuple[ControlEntry, ...]], ...
         "MITRE ATLAS",
         "adversarial ML knowledge base",
         JURISDICTION_INTERNATIONAL,
-        "Only the techniques the 28-attack battery actually exercises. Nothing is claimed from a "
+        "Only the techniques the battery actually exercises — 53 attack probes and 16 benign "
+        "controls, and `owasp-full` now selects all of them (the three memory-poisoning "
+        "probes were in the battery and in no suite, so they never ran). Nothing is claimed from a "
         "mapping alone.",
         _ATLAS,
     ),

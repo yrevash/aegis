@@ -169,14 +169,30 @@ handful of records to make sure the text is coherent and on-topic.
 | Add a hand-written doc | drop a new `*.md` (with frontmatter) into `adapter/corpus/` — no code change |
 
 **How the documents reach retrieval.** `SyntheticDataset.documents` (LLM-written) and the
-hand-authored `adapter/corpus/*.md` files are ingested by the retrieval pipeline
-([`retrieval/pipeline.py`](../../backend/src/app/retrieval/pipeline.py)), which chunks them
-**structure-aware** (heading-scoped chunks with overlap and a section prefix), validates
-each chunk for poisoning, deduplicates (exact **and** near-duplicate), and writes them into
-the embedded vector store (vectors) and Neo4j (graph, via LightRAG). Re-ingesting the same corpus is
-**idempotent** — it won't create duplicates — so you can regenerate and re-run freely.
-Writing varied, well-structured documents here directly improves retrieval quality
-downstream.
+hand-authored `adapter/corpus/*.md` files go through the **six-stage ingestion pipeline**
+(`parse → chunk → enrich → embed → index → graph`; entry point
+`app.ingestion.upload.upload_document`, stage-by-stage detail generated into
+[`../module/PIPELINES.md`](../module/PIPELINES.md)). It chunks them **structure-aware**
+(heading-scoped chunks with overlap and a section prefix, `aegis.retrieval.chunker`),
+validates each chunk for poisoning (`aegis.retrieval.validation.validate_content`),
+deduplicates (exact **and** near-duplicate, by Jaccard similarity), writes the embedding of
+record onto the `chunks` row, and publishes the chunks into **Qdrant** under
+content-addressed, tenant-prefixed ids — *not* into an embedded vector store, which is
+what this paragraph used to say and what ADR 0009 removed. The graph stage extracts each
+chunk's entities and relations onto `chunks.meta`, a row this system owns, so the graph
+stays answerable with the graph store down; **Neo4j** holds the knowledge graph itself.
+Re-ingesting the same corpus is **idempotent** — content-addressed ids mean it won't
+create duplicates, and the reindex path *prunes* the points that are no longer expected,
+so re-chunking a document converges instead of leaving orphans behind. Writing varied,
+well-structured documents here directly improves retrieval quality downstream.
+
+**One synthetic desk per tenant.** The in-memory record store the agent and the MCP front
+door both read is keyed by the governance context's `tenant_id`
+(`backend/src/app/agent/deps.py`, `_shared_stores` / `shared_record_store`). This is worth
+knowing before you demo: it was one process-wide store, and two admins in two different
+tenants were served the identical twenty-five record ids. A platform-scoped principal —
+and the synchronous seams that run before a context exists — get their own store under the
+`None` key rather than borrowing a tenant's.
 
 ---
 

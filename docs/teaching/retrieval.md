@@ -30,7 +30,7 @@ flowchart TD
     AC -->|miss| RW[Query rewrite]
     RW --> V[Vector arm]
     RW --> G[Graph arm]
-    RW --> K[BM25 keyword arm]
+    RW --> K["Keyword arm (Postgres ts_rank)"]
     V --> F[Reciprocal Rank Fusion k=60]
     G --> F
     K --> F
@@ -57,17 +57,39 @@ flowchart TD
      each element's own `file_path` preserved.
    - **Graph** — entity and relation vectors, resolved back to passages
      through LightRAG's chunk key-value table in Postgres.
-   - **BM25 keyword** — corpus-wide when the backend implements
-     `KeywordBackend`, otherwise a re-ranking of the pool the other arms
-     already recalled.
+   - **Keyword** — corpus-wide when the backend implements `KeywordBackend`,
+     otherwise a re-ranking of the pool the other arms already recalled. On
+     the shipped Postgres path this is full-text search over the `search_vector`
+     tsvector, ranked by `ts_rank`.
 4. **Fusion.** `reciprocal_rank_fusion()` sums `1/(k + rank)` across the arms
    a passage appeared in, with `k = 60`. **RRF** — reciprocal rank fusion —
    is rank-based and weightless: a passage ranked well by several arms beats
    one ranked well by only one, and no arm carries a tuning weight.
-5. **The keyword arm reports what it actually is.** Corpus-wide BM25 is a real
-   recall arm, tagged `BM25` and listed in `provenance.origins`. A pool-scoped
-   pass reorders but cannot add recall, so it is fused, carries **no** origin,
-   and is reported as `KeywordReport(scope="pool", adds_recall=False)`.
+5. **The keyword arm reports what it actually is.** A corpus-wide keyword pass
+   is a real recall arm, listed in `provenance.origins`. A pool-scoped pass
+   reorders but cannot add recall, so it is fused, carries **no** origin, and is
+   reported as `KeywordReport(scope="pool", adds_recall=False)`.
+
+   **And it is not Okapi BM25.** The wire value of `RetrievalOrigin` is still
+   `bm25` — it is on the wire in three packages and in stored provenance rows,
+   so changing it would rewrite history — but the shipped Postgres
+   implementation is `ts_rank`, which has two of BM25's three ideas and not the
+   third. Term-frequency saturation and length normalisation are there; **IDF is
+   not**, so nothing here weights a rare identifier above a common word. A
+   passage ranks above another because it covers more of the query's terms, not
+   because the terms it covers are rarer. The console renders the arm as
+   **"Keyword (ts_rank)"** rather than "BM25" for exactly that reason. RRF fuses
+   on *rank*, not score, so the missing IDF costs ordering quality **within**
+   this arm and nothing across arms.
+
+   `ts_rank` rather than `ts_rank_cd`, and that was measured: `ts_rank_cd` is
+   proportional to the number of covers, so a passage repeating one common query
+   word four times outranks the passage that actually carries the identifier —
+   the exact failure this arm exists to fix.
+
+   The in-memory backend (`aegis.retrieval.memory`, used by the eval harness and
+   the ablation ladder) *does* implement real BM25, which is why the ablation
+   table names BM25 and this page does not.
 6. **Rerank.** `fastembed`'s ONNX `TextCrossEncoder` re-scores the fused list.
    It runs locally, needs no GPU and pulls no torch dependency. `RerankOutcome`
    separately reports whether reranking *ran* and whether it actually *graded*,
@@ -156,7 +178,7 @@ authenticated caller), which returns the tenant's knowledge graph slice.
 | `aegis/src/aegis/retrieval/agentic.py` | the bounded multi-round sufficiency loop |
 | `aegis/src/aegis/retrieval/query_rewrite.py` | the cheap-model rewrite |
 | `aegis/src/aegis/retrieval/vector_store.py` | the Qdrant client wrapper |
-| `aegis/src/aegis/retrieval/chunk_index.py` | chunk point ids and publication |
+| `aegis/src/aegis/retrieval/chunk_index.py` | chunk point ids, publication, and `prune_stale_chunk_points` |
 | `aegis/src/aegis/retrieval/graph_index.py` | entity and relation point ids and publication |
 | `aegis/src/aegis/retrieval/graph_extract.py` | entity and relation extraction |
 | `aegis/src/aegis/retrieval/spotlight.py` | marks retrieved text as data, not instructions |
@@ -167,6 +189,10 @@ authenticated caller), which returns the tenant's knowledge graph slice.
 
 ## What it does not do
 
+- **No Okapi BM25 on the production path.** The keyword arm is Postgres
+  `ts_rank` and carries no IDF term. A real BM25 index was rejected on
+  tenant-isolation and dependency grounds; the arm reports what it is instead of
+  what its wire value is called.
 - No hosted reranking API. The reranker is a local ONNX model.
 - The agentic loop has a fixed ceiling; it does not tune rounds per question.
 - It cannot recover context that ingestion never extracted.

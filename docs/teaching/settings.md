@@ -23,7 +23,7 @@ convention someone has to remember into arithmetic the resolver performs.
 
 ```mermaid
 flowchart TD
-    SPEC["spec.py — 25 SettingSpec entries<br/>type, default, bounds, writable_by, readable_by, merge rule"] --> R
+    SPEC["spec.py — 27 SettingSpec entries<br/>type, default, bounds, writable_by, readable_by, merge rule"] --> R
     P["platform row: tenant_id NULL, user_id NULL"] --> R["resolver.resolve()<br/>platform then tenant then user"]
     T["tenant row: tenant_id set, user_id NULL"] --> R
     U["user row: both set"] --> R
@@ -43,22 +43,29 @@ flowchart TD
 
 ### Every setting is declared once
 
-`spec.py` holds `SETTING_SPECS` — **25 keys**, each a `SettingSpec` carrying its
+`spec.py` holds `SETTING_SPECS` — **27 keys**, each a `SettingSpec` carrying its
 type, default, bounds, the roles that may read it, the roles that may write it,
 and its merge rule. A new control is a catalogue entry plus a row, never a new
 table and never a migration.
 
-The keys group into six families: `agent.*` (gate threshold, plan iterations,
-retrieval rounds, parallelism, model, mode), `guardrails.*` (topical and grounding
-blocking, denylist terms and patterns, PII entities and blocking, input ceiling),
-`jobs.*` (in-flight caps and cost estimates), `memory.*` (retention windows),
-`seat.*` (the six per-user capabilities), and `skills.enabled`.
+The keys group into six families: `agent.*` (8 — gate threshold, plan iterations,
+the two trajectory token ceilings, retrieval rounds, parallelism, model, mode),
+`guardrails.*` (7 — topical and grounding blocking, denylist terms and patterns,
+PII entities and blocking, input ceiling), `jobs.*` (3 — in-flight caps and cost
+estimates), `memory.*` (2 — retention windows), `seat.*` (the six per-user
+capabilities), and `skills.enabled`.
+
+Two of the `agent.*` keys are the agent loop's token ceilings —
+`agent.max_trajectory_tokens` (36 000) and `agent.max_tool_result_tokens`
+(4 000). Both are `TIGHTEN_ONLY`, so a tenant may shrink either and never widen
+one, and both are enforced on the main graph *and* on every sub-agent lane. This
+is the catalogue seam that makes a per-tenant ceiling a row rather than a deploy.
 
 ### Three merge rules
 
 | Rule | Count | Behaviour | Example |
 |---|---|---|---|
-| `TIGHTEN_ONLY` | 16 | The value may only become stricter than the enclosing scope. | `agent.gate_min_risk`, `guardrails.pii.block` |
+| `TIGHTEN_ONLY` | 18 | The value may only become stricter than the enclosing scope. | `agent.gate_min_risk`, `agent.max_trajectory_tokens`, `guardrails.pii.block` |
 | `OVERRIDE` | 5 | The last scope wins outright. | `agent.model`, `memory.retention_days` |
 | `UNION` | 4 | Collections accumulate; nothing can be removed. | `guardrails.denylist.terms`, `skills.enabled` |
 

@@ -5,6 +5,12 @@
 > what that box showed on that day. Figures move; the *shape* of each screen and the
 > *source* under each number do not. Where a claim could not be checked by looking, it
 > says "not verified".
+>
+> **Refreshed against the code on 2026-08-28** for the changes that landed since:
+> the graph's `verify` node, the two trajectory token ceilings, the live RAGAS panel
+> on Evals, the keyword arm's honest label, and the new **Interop** screen. Sections
+> marked *"read from the code, not re-walked"* were checked against the component and
+> the endpoint rather than by looking at a running box.
 
 **Who this portal is for.** The people who build and tune the agent. Not the people who
 run the servers (that is DevOps), not the people who own the tenant (that is the tenant
@@ -19,16 +25,26 @@ measurement of the agent's own behaviour, or the evidence trail behind one run.
 
 | Account | Password | Tenant | Sections in the nav |
 |---|---|---|---|
-| `northwind.analyst` | `demo` | pinned to tenant 1 | **15** |
-| `ai` | `demo` | none — platform staff | **16** |
+| `northwind.analyst` | `demo` | pinned to tenant 1 | **16** |
+| `ai` | `demo` | none — platform staff | **17** |
 
 Both are `fine_role: ai_team`. They see different navigation, and that is the single
 best unscripted moment available in this portal. Read [The two accounts](#the-two-accounts-and-why-they-see-different-screens)
 before you demo it, because a jury that spots it and gets a shrug has found a bug; a
 jury that spots it and gets the answer below has found a design.
 
-Log in with the form (username / password), not the demo-access buttons, if you want to
-be certain which account you got.
+**Only one of the two is a quick-in button.** The login page offers *Northwind · AI
+team* (`northwind.analyst`); `ai` is **not** on the list, and you reach it by typing the
+username and password into the form.
+
+That removal is itself worth a sentence if a juror asks. The quick-in list used to offer
+`ai` and `client` — seed rows with `tenant_id = NULL`. They log in perfectly well, and
+then every tenant-scoped screen is correctly empty because there is no tenant to scope
+to. The client overview showed a dash for *"Your spend"* while `northwind.client` had
+**2,653** ledger rows behind it, and a reviewer reads that as broken software rather than
+as the wrong account. The un-tenanted `admin` stays on the list because it is the
+*platform* operator — a different job, with different screens — not an empty version of a
+tenant one. *(Read from `web/src/app/login/page.tsx`, not re-walked.)*
 
 ### Two things are down in this environment, and you should know before a jury finds out
 
@@ -46,10 +62,29 @@ You can still demo both — the *fail-closed* behaviour is a genuine safety prop
 the screens narrate it precisely. What you cannot show today is a successful
 transcription or a successful image analysis. Do not promise one and then click.
 
+### Listings open closed — know this before you click
+
+*(DESIGN.md §4; read from the code, not re-walked.)* Every panel whose body is a
+list of rows — jobs, prompts, probes, entities, cases — opens as **one bar**
+carrying its title, its row count and one key figure. **Hover expands it; click
+pins it open**, and the pin survives the pointer leaving. One surface per page
+stays open: the thing the page is named after.
+
+The forcing function is you. The whole platform is presented in ten to fifteen
+minutes, and a reviewer arriving on a screen gets a few seconds to decide what it
+is; spending them scrolling past forty rows to find the one figure that matters is
+a failed screen however correct the table was. If a juror asks, the rows are
+collapsed and **never `display:none`** — they stay in the accessibility tree and
+reachable by keyboard, and each trigger is a real `<button>` carrying
+`aria-expanded`.
+
 ### The order that tells a story
 
 Console (one run, end to end) → Flow tab → Trace tab → RAG → Guardrails → Harness →
 Access demo → the rest on request. Everything else is a supporting exhibit.
+
+If the jury is technical, **Interop** (§17) is the strongest of the "rest": it is the
+one screen whose claims a reviewer can check from their own terminal while you talk.
 
 ---
 
@@ -126,6 +161,15 @@ the platform ceiling). The run always names who settled the width.
 `Knowledge agent — done, 3329 ms, $0.0010, in the answer`, then *"Synthesised from 2 of
 2 agents."* Each sub-agent carries its own latency and its own cost, and the synthesis
 says how many lanes actually landed in the answer.
+
+A lane can also end in two **designed** terminal states that are not `done` and not
+`failed`: `timed out` and **`cut short at its ceiling`**. The second is the lane hitting
+`max_trajectory_tokens`. It is not an error — a lane reaching its ceiling has by
+construction already done a lot of work — so what it found before the cut is **kept**,
+the wire carries `status: "ceiling"` rather than `done`, and the synthesis names the lane
+as cut short. Partial findings from a truncated lane are worth strictly more than
+silence; rendering it identically to a clean lane made the designed state invisible, and
+rendering it as a failure would throw the findings away.
 
 **The answer**, with an `output redacted` badge when an output rail changed the text.
 In the captured run the answer names the escalation path and the person it escalates to
@@ -208,7 +252,17 @@ somebody maintained.
 
 The header says it: *"The compiled graph, read from the running backend."* Nodes:
 `Guard in → Route → Memory QA (Recall / Persist) → Plan team → Fan-out → Synthesise →
-Retrieve → Plan → Risk gate → Approve → Act → Reflect → Generate → Guard out → Stream`.
+Retrieve → Plan → Risk gate → Approve → Act → Verify → Reflect → Generate → Guard out →
+Stream`.
+
+**`Verify` is the node worth pausing on**, and it is new since this document was first
+walked. `Act` no longer reports its own success — a tool that updated the wrong record
+and returned `ok=True` used to count as "goal met". `Verify` decides the round against
+something *outside* the model, cheapest tier first: deterministic (the rows already in
+hand — a tool failure, a rail refusal, a read-only round, an oscillation), then a
+read-only read-back proving the write actually landed, and only then a judge call. The
+stance is deliberate: **no self-critique**. Asking a model whether its own work was good
+is the one thing the evidence is clearest does not reliably help.
 
 After a run, each node is annotated with what actually happened: `done`, `terminal`,
 `unreported`, and a legend distinguishing **traversed** from **not taken** from
@@ -333,17 +387,19 @@ JOINED CALLS + RESULTS · Tool calls
 
 Source line: `03827a5b77860a2f643dc074dee6f9ae · 14 nodes · $0.0222`.
 
-**The knob surface.** `16 KNOBS` — 6 int, 5 bool, 3 float, 2 other — and
-`TUNED OFF DEFAULT 0/16`. Source: `harness_config()`.
+**The knob surface.** `18 KNOBS` — 8 int, 5 bool, 3 float, 1 enum, 1 str — and
+`TUNED OFF DEFAULT 0/18`. Source: `harness_config()`. *(Counts read from the code, not
+re-walked: two token ceilings were added and `max_plan_iterations`' default moved.)*
 
-**Every knob**, a table of value / default / allowed bounds. On the live box, all 16 at
-default:
+**Every knob**, a table of value / default / allowed bounds. All 18 at default:
 
 | Knob | Value | Bounds |
 |---|---|---|
 | `gate_min_risk` | `high` | low · medium · high |
 | `self_repair_enabled` | on | — |
-| `max_plan_iterations` | 2 | ≥ 1 |
+| `max_plan_iterations` | 4 | ≥ 1 |
+| `max_trajectory_tokens` | 36,000 | ≥ 2,000 · ≤ 200,000 |
+| `max_tool_result_tokens` | 4,000 | ≥ 500 · ≤ 50,000 |
 | `query_rewrite_enabled` | on | — |
 | `agentic_retrieval_enabled` | on | — |
 | `agentic_retrieval_max_rounds` | 2 | ≥ 1 |
@@ -364,10 +420,19 @@ it.
 
 ### What to say
 
-> "Sixteen knobs, and each one shows its bound, not just its value. `max_plan_iterations
+> "Eighteen knobs, and each one shows its bound, not just its value. `max_plan_iterations
 > ≥ 1` with a hard cap is what guarantees the loop terminates — an agent that can plan
-> forever is an agent that can spend forever. Zero of sixteen are tuned off default on
+> forever is an agent that can spend forever. Zero of eighteen are tuned off default on
 > this box, so nothing you are about to see is a special setting I dialled in."
+
+And on the two ceilings, which are the newest rows:
+
+> "Aegis has no trajectory compaction, so these two are what stand in for one.
+> `max_trajectory_tokens` bounds a whole lane; `max_tool_result_tokens` bounds one tool
+> result's contribution to it — and that is the one that bites first, because the real
+> exposure is a single unbounded result, not a long conversation. Both are enforced on
+> the main graph *and* on every sub-agent lane, and both are `tighten_only` in the
+> settings catalogue, so a tenant can shrink either and never widen one."
 
 ### What a jury might ask
 
@@ -579,14 +644,17 @@ version can never delete the platform floor.
 
 ## 5. Evals
 
-`/app/ai_team/evals` · hint `RAGAS · DeepEval`
+`/app/ai_team/evals` · hint `ragas · offline gate` · tooltip *"Deterministic offline
+gate, plus live scoring with the real ragas library"*
 
 ### What this screen is for
 
-The offline regression gate on retrieval quality. It runs before a release, it is
-deterministic, and it calls no model.
+Two things, and keeping them apart is the point. A **deterministic offline gate** on
+retrieval quality that runs before a release, calls no model and costs nothing — and,
+beside it, a **live run of the real `ragas` library** whose every metric is LLM-judged
+and therefore costs money.
 
-### What is on it
+### What is on it — the offline gate
 
 **Regression gate.**
 
@@ -604,30 +672,80 @@ Source: offline_regression_gate · deterministic · no LLM judge
 | Groundedness | 100.0 % | ≥ 85.0 % | 6 |
 | Context precision @1 | 83.3 % | ≥ 66.0 % | 1 |
 
-**One cell left empty** — and this is the panel to point at:
-
-> **Answer relevancy** — *Scoring it needs a model to judge a model; every figure here
-> is deterministic.*
-> **TO MEASURE IT** — An LLM judge wired into the gate.
-
 **Metric × case matrix.** Seven cases, each a real retrieval question from the seed
 corpus, with a per-metric verdict and an em-dash where a metric does not apply to that
 case.
 
+### What is on it — the live RAGAS panel
+
+*(Read from the code, not re-walked. `components/evals/EvalsView.tsx`,
+`POST /v1/evals/live-run`.)*
+
+Beside the gate sits a card headed **`ragas · answer relevancy`**. Before you press
+anything it reads *"One cell left empty"*:
+
+> **Answer relevancy** — *Scoring it needs a model to judge a model, and every figure on
+> this page is deterministic. The number is not withheld — it is not computed until
+> somebody asks, because asking costs model calls.*
+> **NEEDED** — Press the button; the run is metered like any other call.
+
+The button says `Score 2 cases with ragas`, and the line under it states the price
+**before** you press: `2 cases · ~18 gateway calls · metered to your tenant`. While it
+runs it reads `Judging… 12s` and *"Judged calls are in flight; this takes 15–120
+seconds."*
+
+Once it has run, the title changes to **"Scored by ragas"** and a caveat sits **above**
+the numbers rather than below them:
+
+> *Scored with the retrieved context standing in as the answer, so this measures that
+> the ragas metrics run end-to-end against real content — not that a generated answer is
+> good.* **Faithfulness is therefore 1.000 by construction.** *Scoring a generated answer
+> costs one generation call per case and is the next increment.*
+
+A metric that could not be measured prints its `note` instead of a figure, never a
+`0.000`: `Faithfulness` returns `NaN` when the judge produced no statements and
+`AnswerRelevancy` returns `0.0` when it generated no question to compare against —
+neither is a measurement, and `_usable()` treats both as not-run.
+
 ### What to say
 
-> "This is the gate, and it runs with no model in the loop — the same input gives the
-> same score every time, which is what you need from something that blocks a release.
-> And look at the empty cell: answer relevancy is a RAGAS metric that needs a model to
-> judge a model. Rather than wire in a judge and quote its number as if it were
-> measurement, the screen leaves the cell empty and says what it would take to fill it."
+> "Two halves, and the difference between them is the whole point. The gate on the left
+> runs with no model in the loop — the same input gives the same score every time, which
+> is what you need from something that blocks a release. The card on the right runs the
+> *actual* `ragas` package, LLM-judged, and it tells you what it will cost before you
+> press it. Eighteen gateway calls for two cases."
+
+And the sentence that lands it:
+
+> "Every one of those judge calls goes through the Aegis gateway, not at a provider
+> directly. That is what `evals/libs/gateway_adapters.py` exists for. Pointing `ragas` at
+> a `base_url` would have worked in ten minutes and would have routed every judge call
+> *around* budget checks, the usage ledger, rate limiting and tracing — which would make
+> the evaluation subsystem the one place this platform's metering claim is false. It
+> shipped that way once: seven invocations, about 108 model calls, about $0.088 spent,
+> and **zero rows in `usage_ledger`**."
 
 ### What a jury might ask
 
-**"So you don't use RAGAS?"** Not the library. These are RAGAS/DeepEval-*pattern*
-metrics implemented deterministically — the tooltip and the source line both say so, and
-so does `docs/teaching/evals.md`. Claiming the library while running proxies is exactly
-the dishonesty this platform is built against.
+**"So you don't use RAGAS?"** Yes, we do. `ragas>=0.4.3` is a dependency, and
+`aegis.evals.libs.ragas_suite` runs the real library's metrics through this platform's
+own metered gateway. What the *offline gate* uses are lexical proxies named after RAGAS
+metrics, and the source line under it says `deterministic · no LLM judge`. Two paths,
+two jobs: the gate has to be free, deterministic and runnable in CI with no keys, and a
+judged metric is none of those things.
+
+**"And DeepEval?"** Not installed, and the reason is specific rather than a shrug:
+`deepeval` requires `click>=8.0.0,<8.4.0` and `huggingface_hub` requires `click>=8.4.2`.
+The ranges are disjoint, so the two cannot coexist in one interpreter — and
+`uv pip install deepeval` *appears* to succeed while silently downgrading click and
+leaving `huggingface_hub` violating its own pin. The offline gate borrows DeepEval's
+**shape** — a declarative `Metric` carrying its own pass bar — and is labelled a pattern,
+not the library.
+
+**"Why is faithfulness exactly 1.000?"** Because the "answer" under test *is* the
+retrieved context, so it is true by construction — and the card says so above the
+figure rather than letting the number speak for itself. That measures whether the
+metrics run end to end against real content, not whether a generated answer is good.
 
 **"Seven cases is small."** Yes. It is a seed corpus gate, not a benchmark. Say so.
 
@@ -802,9 +920,9 @@ rerank."* After (captured live):
 ```
 WHICH METHODS ACTUALLY RAN · Retrieval arsenal   MEASURED · THIS RUN
 RECALL ARMS 3/3 fired
-  Vector (dense)      fired · count n/a
-  Graph (entities)    fired · count n/a
-  BM25 (keyword)      fired · count n/a
+  Vector (dense)       fired · count n/a
+  Graph (entities)     fired · count n/a
+  Keyword (ts_rank)    fired · count n/a
 RRF fusion    50 fused    ON
   "Reciprocal-rank fusion blends the arms into one ranked pool of 50 candidates
    before rerank."
@@ -823,7 +941,7 @@ Self-RAG loop N/A   Not carried on the /query stream — the bounded loop report
 > returned, so any split drawn here would be an equal one — a shape, not a measurement.*
 > **TO MEASURE IT** — A per-arm candidate count on the retrieval event, emitted where
 > the arms are fused.
-> **ARMS THAT FIRED**: Vector (dense) · Graph (entities) · BM25 (keyword)
+> **ARMS THAT FIRED**: Vector (dense) · Graph (entities) · Keyword (ts_rank)
 
 **Sources.** `hybrid · 50 recalled → 6 ranked → 3 used`, a rerank-score-by-rank chart,
 and the ranked list. Source: `/query stream · reranker scores · 6 kept of 50 fused
@@ -831,7 +949,7 @@ candidates`.
 
 ### What to say
 
-> "Three arms — dense vectors, an entity graph and BM25 keyword — fused with reciprocal
+> "Three arms — dense vectors, an entity graph and a keyword arm — fused with reciprocal
 > rank fusion into one pool of fifty, then reranked down to six by a cross-encoder, and
 > three of those six ended up in the answer. Now look at the provenance panel. It could
 > draw a three-way pie chart and nobody would ever check. Instead it says the stream
@@ -846,6 +964,18 @@ That panel is the best forty seconds you have in this portal. Use it.
 vector+graph+bm25 · RRF` as event `#17`, and a run over an empty corpus prints `·
 RRF` with no arms at all (I saw exactly that on tenant 2, whose documents have not
 finished ingesting). What is missing is the per-arm *count*, not the per-arm fact.
+
+**"Why does the screen say `ts_rank` and the trace say `bm25`?"** Because the label was
+overstating what runs, and the fix was to correct the label rather than the record. The
+wire value of `RetrievalOrigin` is still `bm25` — it is on the wire in three packages and
+in stored provenance rows, and rewriting it would rewrite history. The implementation on
+the Postgres path is `ts_rank`, which has two of Okapi BM25's three ideas (term-frequency
+saturation, length normalisation) and **not** the third: there is no IDF, so nothing
+weights a rare identifier above a common word. RRF fuses on *rank*, not score, so the
+missing IDF costs ordering quality within this arm and nothing across arms. The console
+renders the honest name; the record keeps the value it always had. *(The in-memory
+backend the eval harness and the ablation ladder run on does implement real BM25, which
+is why the ablation table still says BM25.)*
 
 **"Spotlighting says N/A — is it implemented?"** Yes: `aegis.retrieval.spotlight` is
 listed as the ENFORCED control for OWASP LLM08 on the security posture, and the landing
@@ -1259,7 +1389,9 @@ The OWASP table names, per threat, the control and the **actual dotted module pa
 e.g. LLM01 → `aegis.guardrails.classifier:deterministic_injection ·
 aegis.guardrails.classifier:classify_injection · aegis.guardrails.pipeline:Guardrails`.
 Three rows are PARTIAL: LLM09 misinformation, AGENTIC-IDENTITY, AGENTIC-TOOL-MISUSE.
-Footer: `Signals: 13 hazard categories · 25 RLS-enforced tables · max 2 plan iterations`.
+Footer: `Signals: 13 hazard categories · 25 RLS-enforced tables · max 4 plan iterations`
+(the plan-iteration default moved from 2 to 4 — read from `harness_config()`, not
+re-walked).
 
 **Input rails** (5 rows, in order): schema/format → PII redaction (Presidio) → prompt
 injection (`deterministic_injection → classify_injection`) → content safety →
@@ -1460,17 +1592,20 @@ the tenant, or you — and whether you may change it.
 *Just me / Everyone in my tenant / Every tenant*. That selector is the whole settings
 model in miniature.
 
-**Categories.** How the agent answers (6), Guardrails (7), Ingestion jobs (3), Memory and
-retention (2), Seat (6), Skills (1).
+**Categories.** How the agent answers (8), Guardrails (7), Ingestion jobs (3), Memory and
+retention (2), Seat (6), Skills (1) — **27 keys** in the catalogue. *(Counts read from
+`SETTING_SPECS`, not re-walked: the two trajectory ceilings joined the `agent.*` family.)*
 
-**How the agent answers** — six controls, each with a `Decided by:` line and a merge
+**How the agent answers** — eight controls, each with a `Decided by:` line and a merge
 label:
 
 | Control | In force | Decided by | Note |
 |---|---|---|---|
 | `agent.agentic_retrieval_max_rounds` | 2 | platform default | Cannot be weakened |
 | `agent.gate_min_risk` | high | platform default | Cannot be weakened — *"It is the ONLY gating signal, so a tenant may lower it (gating more) and never raise it."* |
-| `agent.max_plan_iterations` | 2 | platform default | Cannot be weakened |
+| `agent.max_plan_iterations` | 4 | platform default | Cannot be weakened |
+| `agent.max_trajectory_tokens` | 36,000 | platform default | Cannot be weakened — one lane's whole trajectory |
+| `agent.max_tool_result_tokens` | 4,000 | platform default | Cannot be weakened — one tool result's share of it |
 | `agent.mode` | standard | platform default | **Not wired up — "Nothing reads this yet."** |
 | `agent.model` | default | **your setting** | A preference, not a permission |
 | `agent.team.max_parallel` | 4 | platform default | Cannot be weakened |
@@ -1519,6 +1654,100 @@ Guardrails screen too, as a merge rule per control.
 
 ---
 
+## 17. Interop
+
+`/app/ai_team/interop` · nav label **Interop** · hint `A2A · MCP · CycloneDX`
+
+*(Read from `components/interop/InteropView.tsx` and the endpoints it names, not
+re-walked. It is the newest screen in this portal.)*
+
+### What this screen is for
+
+The published standards a buyer's own tooling can talk to. These were real, tested and
+served — and invisible unless somebody thought to curl a well-known path. A capability
+nobody can find has, for demo purposes, not been built.
+
+### What is on it
+
+**Four protocol cards**, each with its spec mark, one line of description, and the
+endpoints printed **in full**, because the entire point is that a reader can go and hit
+them:
+
+| Card | Spec | What it is | Endpoints |
+|---|---|---|---|
+| **A2A** | Agent2Agent 1.0 | Other agents discover this one and send it work | `/.well-known/agent-card.json` · `/.well-known/jwks.json` · `/v1/a2a` |
+| **MCP** | Model Context Protocol | This agent's tools, exposed to any MCP client | `/v1/mcp` |
+| **CycloneDX** | 1.6 | A bill of materials for the agent, and for its dependencies | `/v1/platform/agbom` · `/v1/stack/sbom` |
+| **OpenTelemetry** | GenAI semconv + OpenInference | Every run exported as spans your collector already reads | `aegis.observability.semconv` |
+
+The A2A card's badge is a **live probe**, not a claim: the page fetches the agent card on
+mount — unauthenticated, the same request a peer agent makes — and shows `answering` or
+`no answer`. Three cards read `served`; only the one that can be checked in the browser
+is checked.
+
+**"What this agent advertises"** — a collapsed panel summarising `2 skills · protocol 1.0`,
+which opens to the skills (`answer-with-provenance`, `governed-action`) and the supported
+interfaces (`JSONRPC → /v1/a2a`) read out of the card this deployment actually serves. If
+the card does not answer: *"The agent card did not answer, so nothing is claimed here."*
+
+**"Why this is safe to expose"** — the security card, and the one thing on the page stated
+rather than probed:
+
+> A2A's `tenant` field arrives **before** authentication and is attacker-controlled. It
+> selects which agent is addressed and **never** sets the database scope — that comes from
+> the bearer token alone.
+>
+> **4 spellings refused** — `"2"` · `"07"` · `"٧"` · `"abc"`
+> *Source: `backend/tests/a2a/test_tenant_refusal.py` — every refusal returns the same
+> code and the same message, so the error cannot enumerate tenants.*
+
+### What to say
+
+> "Three published standards, and every endpoint is on the screen so you can check them
+> yourself. The A2A badge is not a claim — the page fetches the agent card live, the same
+> unauthenticated request a peer agent would make, so a card that stops answering leaves
+> this page saying nothing rather than continuing to advertise."
+
+Then the security card, which is the real point:
+
+> "A2A carries a `tenant` routing field. It arrives before authentication, so it is
+> attacker-controlled — and a platform that let it set the database scope would have
+> handed every caller a tenant selector. Here it selects *which agent is addressed* and
+> nothing else. The scope comes from the bearer token. And look at the four spellings:
+> `2`, `07`, an Arabic-Indic digit seven, and `abc` — every one is refused with the
+> **identical** code and message, because a caller who can tell 'wrong tenant' from 'no
+> such tenant' has an enumeration oracle."
+
+### What a jury might ask
+
+**"Is the agent card signed?"** Only when `a2a_public_origin` is configured, and the
+reason is worth telling. An earlier version read the origin from `request.base_url`,
+which honours the `Host` header — so a request carrying `Host: evil.com` came back with a
+card, **signed by this platform's real key**, whose interface URL and whose `jku` inside
+the *signed* protected header both pointed at the attacker. Aegis's own signature
+certified a document telling peers to send bearer tokens elsewhere, cacheable for five
+minutes. With no configured origin the card is served honestly with relative interface
+URLs, `Cache-Control: no-store` and **no** `signatures` array — because a signature over a
+guessed origin is worth less than no signature, since it looks authoritative.
+
+**"What does the card claim it can do?"** Less than you might expect, deliberately. Every
+entry in `capabilities` is `false` — `streaming`, `pushNotifications`, `extendedAgentCard`
+— because none of them is served. A card advertising a capability the endpoint does not
+implement is the interop equivalent of a fabricated metric.
+
+**"What is in the AgBOM?"** 25 components, CycloneDX 1.6, served as
+`application/vnd.cyclonedx+json`: the 4 domain tools with their risk tiers, 14 model
+deployments (the 12 declared in the fleet **plus** the ones this box actually routed to
+and never declared), the 4 guard stages including `memory_write`, and 3 knowledge
+sources. The `serialNumber` is derived from the content, so two pulls of an unchanged
+deployment produce byte-identical documents and a diff means something changed.
+
+**"Is `/v1/mcp` the same server as before?"** Same server, new name: `aegis-adapter-tools`.
+It was `tcs-adapter-tools`, which is the sort of thing a platform whose central claim is
+that it is domain-agnostic should not be shipping in its protocol handshake.
+
+---
+
 ## The two accounts, and why they see different screens
 
 If you show only one thing about RBAC in this portal, show this.
@@ -1527,7 +1756,7 @@ If you show only one thing about RBAC in this portal, show this.
 |---|---|---|
 | `fine_role` | `ai_team` | `ai_team` |
 | `tenant_id` | 1 | **null** |
-| Nav sections | 15 | 16 |
+| Nav sections | 16 | 17 |
 | Cache | **absent** | present |
 | Guardrails → Red-team block rate | withheld | 82 % |
 | Guardrails → OWASP coverage | withheld | 9 enforced / 3 partial |
@@ -1618,15 +1847,15 @@ Reported, not fixed.
 | Section | The one sentence |
 |---|---|
 | Console | Every step named, sourced and priced as it happens — and `not measured` before it is. |
-| Flow | The compiled graph, read from the running backend, so it cannot drift. |
+| Flow | The compiled graph, read from the running backend, so it cannot drift — `Verify` sits between `Act` and `Reflect`. |
 | Trace | A real LangGraph `interrupt` on a Postgres checkpointer — 676 checkpoints and counting. |
-| Harness | Sixteen knobs with their bounds; zero tuned off default on this box. |
+| Harness | Eighteen knobs with their bounds; zero tuned off default on this box. |
 | MLOps | Asked for 90 % coverage, measured 93 % on 181 held-out rows — and SHAP says why. |
 | LLMOps | A prompt is a versioned artefact with an author, a diff and a human gate. |
-| Evals | Deterministic, no LLM judge — and one metric left empty because scoring it would need one. |
+| Evals | A free deterministic gate, plus the real `ragas` library on demand — and the price stated before you press. |
 | Token opt | Six roles, six price bands, real fallback chains, every call repriced at the baseline. |
 | Memory | Facts with ids, confidences, recall counts, a supersession chain and an erase button. |
-| RAG | Three arms, RRF, rerank — and a provenance panel that refuses to draw a split nothing measured. |
+| RAG | Three arms, RRF, rerank — and a provenance panel that refuses to draw a split nothing measured; the keyword arm is labelled `ts_rank`, not BM25. |
 | Graph | Extracted from the corpus, not hand-built; a run highlights the subgraph it stood on. |
 | Cache | Not in the nav for a tenant-pinned account, because there is no filter that makes it safe. |
 | Jobs | Six stages in order, and job #15 failed on a budget ceiling, not a parser. |
@@ -1635,3 +1864,4 @@ Reported, not fixed.
 | Guardrails | Six rails in, six out, and injection blocked in 6 ms with the signature named. |
 | Access demo | Same question, two roles, two live runs, two different candidate sets. |
 | Settings | Every value names who decided it and which direction it may move. |
+| Interop | Three published standards with every endpoint on screen — and the A2A routing field that never sets the tenant. |

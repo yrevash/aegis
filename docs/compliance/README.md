@@ -14,9 +14,9 @@ DevOps portal renders that. If the three ever disagree,
 resolved against the real filesystem, the real served route table and the real
 pytest node ids on each run.
 
-**Twelve frameworks, India first.** Sections 2–5 are India's: the DPDP Act and its
+**Thirteen frameworks, India first.** Sections 2–5 are India's: the DPDP Act and its
 2025 Rules, the CERT-In Directions, the MeitY / RBI / SEBI / BIS layer, and the
-derived data-residency inventory the first two both depend on. Sections 6–14 are
+derived data-residency inventory the first two both depend on. Sections 6–15 are
 the international frameworks. The ordering is by jurisdiction, not by where Aegis
 scores well: for a deployment in India the first three are law and the rest are
 practice, and a reviewer's own risk register is ordered the same way.
@@ -28,7 +28,7 @@ enforced. That ratio is the honest one and it is not flattered anywhere below.
 NIST AI RMF, all four functions, and MITRE ATLAS, nine of nine applicable — its tenth,
 `AML.T0018 Backdoor ML Model`, cannot apply, because the only fitted model is trained
 in-process from the host's own frame and there is no downloaded artefact to backdoor** —
-see sections 8 and 9, and `docs/governance/`, the written artefacts that close Govern
+see sections 9 and 10, and `docs/governance/`, the written artefacts that close Govern
 and Map.
 
 ---
@@ -206,7 +206,7 @@ flip with configuration; the states here are the framework-level judgement.
 
 | ID | Risk | State | Evidence | What is missing |
 |---|---|---|---|---|
-| **LLM01** | Prompt Injection | **enforced** | `aegis/src/aegis/guardrails/classifier.py` (`deterministic_injection` signature backstop + fail-closed `classify_injection`); screened at all three rails — `aegis/src/aegis/guardrails/pipeline.py` (`check_input`, `check_output`, `check_tool_result`); indirect injection tested at the rail it would actually arrive on. 16 of 48 attack probes carry `owasp="LLM01"`. Tests: `aegis/tests/redteam/test_stages_and_suites.py::test_the_indirect_injections_are_caught_at_the_tool_result_rail`, `aegis/tests/security/test_posture.py::test_injection_enforced_when_model_layer_wired`. | Degrades to **partial** when no model completer is wired — 10 battery probes are semantic-only and leak offline **by design**, and the report says so rather than hiding it. Injection is never marked solved (`backend/src/app/platform/risk_map.py`, AA-03). |
+| **LLM01** | Prompt Injection | **enforced** | `aegis/src/aegis/guardrails/classifier.py` (`deterministic_injection` signature backstop + fail-closed `classify_injection`); screened at all three rails — `aegis/src/aegis/guardrails/pipeline.py` (`check_input`, `check_output`, `check_tool_result`); indirect injection tested at the rail it would actually arrive on. 16 of the 50 attack probes carry `owasp="LLM01"`. Tests: `aegis/tests/redteam/test_stages_and_suites.py::test_the_indirect_injections_are_caught_at_the_tool_result_rail`, `aegis/tests/security/test_posture.py::test_injection_enforced_when_model_layer_wired`. | Degrades to **partial** when no model completer is wired — 10 battery probes are semantic-only and leak offline **by design**, and the report says so rather than hiding it. Injection is never marked solved (`backend/src/app/platform/risk_map.py`, AA-03). |
 | **LLM02** | Sensitive Information Disclosure | **enforced** | `aegis/src/aegis/guardrails/pii.py` (`redact`, `scan`; Presidio or anchored-regex+Luhn engine) applied inbound *before the classifier call*, outbound before the answer, and on tool results. Red-team suite `disclosure` (5 probes). Test: `aegis/tests/security/test_posture.py::test_pure_code_controls_are_enforced`. | — |
 | **LLM03** | Supply Chain | **enforced** | Inventory, verdict and gate. *Inventory:* hash-pinned lockfiles (`backend/uv.lock` + `aegis/uv.lock`, 6,367 `sha256` digests between them) and a live SBOM resolved from the **actually installed** distributions at request time (`backend/src/app/platform/stack.py` → `GET /v1/stack`), exported as CycloneDX 1.6 and SPDX 2.3 from one inventory pass (`backend/src/app/platform/sbom.py` → `GET /v1/stack/sbom`) so a buyer's own scanner can read it. *Verdict:* a live OSV.dev query gives each installed version a vulnerability verdict (`backend/src/app/platform/advisories.py` → `POST /v1/stack/advisories`), holding the same honesty rule as the patch check — never `clean` without a real answer, and `passed` is false whenever anything is vulnerable **or** unknown. Freshness stays a separate question (`POST /v1/stack/patch-check`). *Gate:* `.github/workflows/ci.yml` runs the audit and fails the build on any advisory not recorded in `backend/known_advisories.json`, and on any package the feed could not be asked about. Tests: `backend/tests/api/test_supply_chain.py`, `backend/tests/api/test_platform_surfaces.py`. | Two advisories are currently outstanding and both are pinned by upstream libraries — `presidio-anonymizer` holds `cryptography` under 49 (fixes land in 49/50), `arize-phoenix` pins `strawberry-graphql==0.314.3` (fixes land in 0.315.4/0.315.7). They are reported as **vulnerable** on `POST /v1/stack/advisories` and recorded in `backend/known_advisories.json` with what would release each; the acknowledgement stops the build failing and changes nothing else. No in-toto/SLSA build provenance — the one assurance here that per-file `sha256` pinning does not substitute for. |
 | **LLM04** | Data & Model Poisoning | **partial** | Retrieval side is gated at write time: `aegis/src/aegis/retrieval/validation.py::validate_content` rejects embedded injection payloads, oversized and non-printable blobs *before* the store — and the gate is now **attacked rather than asserted**, by six poisoning probes at a fourth battery stage aimed at it (MITRE ATLAS AML.T0020; `aegis/tests/redteam/test_atlas_families.py`). Five of six are refused before the store. | The sixth probe leaks and is marked semantic-only: a poisoned **fact** in ordinary policy prose carries no instruction for a deterministic gate to match. And the ML spine still trains from a host-supplied frame (`aegis/src/aegis/ml/dataset.py`) with **no integrity digest**, so nothing records which frame produced a given fitted model. Partial at the framework level. |
@@ -245,7 +245,50 @@ the rail is a model judgement with no deterministic backstop underneath it.
 
 ---
 
-## 7. OWASP Top 10:2025 (web / API surface)
+## 7. OWASP Top 10 for Agentic Applications (ASI, 2026)
+
+**Why this section exists.** The agentic list was served by `GET /v1/compliance` before it
+was written down here, which is the wrong way round for a document that calls itself the
+authority: the endpoint carried ten controls this page did not have a row for, and the
+prose above it said "twelve frameworks" while the catalogue held thirteen. It is the
+framework closest to what Aegis actually is — the LLM list governs what goes into a model
+and comes back out; this one governs an agent that *plans, holds identity, remembers, and
+calls tools that change data*. Titles are verbatim from the OWASP GenAI Security Project's
+*Top 10 for Agentic Applications*, version 2026 (published 9 December 2025), read from that
+document's own PDF rather than from secondary sources, several of which disagree with it.
+
+One row is enforced and nine are partial, and that ratio is the honest one. This is the
+newest of the thirteen frameworks and the one whose controls are least settled anywhere;
+a page claiming otherwise would be claiming to have solved the open problem.
+
+| ID | Threat | State | Evidence | What is missing |
+|---|---|---|---|---|
+| **ASI01** | Agent Goal Hijack | **partial** | Injection is screened at **four** rail stages — input, output, tool result and the memory write (`aegis/src/aegis/guardrails/pipeline.py`) — and the human approval gate bounds any plan that survives them before it acts (`aegis/src/aegis/agent/graph.py`). Test: `aegis/tests/redteam/test_stages_and_suites.py::test_each_probe_is_screened_by_the_rail_its_stage_names`. | Injection is never marked solved on this platform and is not marked solved here. Ten battery probes leak with no model completer wired; the deterministic layer catches phrasing, not intent. The gate is the decisive control **precisely because** the rails are not sufficient. |
+| **ASI02** | Tool Misuse and Exploitation | **enforced** | Tools are a typed, per-persona allowlist with a risk tier each (`backend/src/app/adapter/tools.py`, `ALLOWLIST` + the risk-tiered registry); anything at or above the gate threshold stops for a human, and one approval authorises **exactly** the calls it enumerated and no others (`aegis/src/aegis/agent/graph.py`, `gate` / `approval` / `_authorised_calls`). Every call is audited with actor, arguments and approver. Test: `aegis/tests/agent/test_gate_authorises_what_runs.py::test_one_gate_authorises_exactly_the_actions_it_enumerated`. | — |
+| **ASI03** | Identity and Privilege Abuse | **partial** | Tenancy is enforced in Postgres RLS beneath the application filters (`aegis/src/aegis/governance/rls.py`), and the MCP surface **re-resolves the caller's identity and authority on every call** rather than once per connection (`backend/src/app/mcp/server.py`, `resolve_caller`) — measured over one socket by swapping the bearer and watching the tool list and tenant scope change with it. Test: `backend/tests/api/test_admin_governance.py::test_tenant_admin_cannot_read_other_tenant`. | What is enforced is the tenant boundary and per-call re-resolution. What is **absent is an agent identity at all**: the agent acts as the human whose token it holds, so there is no delegation chain a third party could verify and no way to distinguish "this agent, acting for this person" from "this person". The A2A card is the platform's first verifiable identity and it identifies the *deployment*, not a running agent. |
+| **ASI04** | Agentic Supply Chain Vulnerabilities | **partial** | Every model call goes through one vetted gateway; dependencies are pinned with a constraint block a fresh resolve honours (`backend/pyproject.toml`); the platform serves its own SBOM in CycloneDX 1.6 and SPDX 2.3 (`GET /v1/stack/sbom`); and — the gap this row named until it was built — an **Agent** Bill of Materials at `GET /v1/platform/agbom` (CycloneDX 1.6, `application/vnd.cyclonedx+json`) publishes the tools with their risk tiers, the model fleet, the four rail stages and the knowledge collections as one deterministic inventory whose `serialNumber` is derived from the component list itself. Tests: `backend/tests/api/test_supply_chain.py::test_an_audit_that_could_not_run_does_not_pass`, `backend/tests/platform/test_agbom.py`. | The AgBOM is published and **not signed**, which is what the emerging agentic-supply-chain guidance actually asks for. Dependency pinning is verified; artefact attestation is not — nothing checks that a published wheel was built from the source it claims. |
+| **ASI05** | Unexpected Code Execution (RCE) | **partial** | There is no code-execution tool and no shell. The in-process registry is a closed set of typed, allowlisted callables with validated argument models (`backend/src/app/adapter/tools.py`, `TOOL_REGISTRY`), and an external tool discovered from an MCP peer starts at **HIGH** risk — so an unrecognised name cannot slip under the human gate by being unknown, and the persona allowlist is re-checked before any connection is opened. Test: `backend/tests/adapter/test_allowlist.py::test_client_cannot_run_admin_tool`. | **The tool set is not closed, and an earlier version of this row claimed it was.** A registered MCP peer contributes tools at runtime, and a peer can add one tomorrow that nobody has assessed. What bounds that is risk-tiering and the gate, not the absence of a path — which is a weaker and truer statement. Nothing sandboxes an external tool's effects on the peer's own side. |
+| **ASI06** | Memory and Context Poisoning | **partial** | A fourth rail stage screens a candidate fact **before** it reaches the durable store (`aegis/src/aegis/guardrails/memory_write.py` for the contract, `aegis/src/aegis/memory/consolidate.py` for the screen at `_reconcile`), and refusals are written to the fact-write audit trail under their own operation. The other three stages structurally cannot see this attack: the turn that poisons the store and the turn poisoned by it are **different turns**, so guarding both ends of one turn never caught it. The screen is bound on **both** drain paths — the hot path after every turn and the 60-second backstop sweeper — because binding one is how it stayed unbound while looking wired (`backend/tests/memory/test_write_screen_bound.py`). Test: `aegis/tests/memory/test_consolidate.py::test_a_poisoned_fact_is_refused_and_audited_rather_than_stored`. | Three of four poisoning probes are refused; the fourth is the honest limit and it is declared rather than curated out. A policy override phrased as an ordinary business sentence — *"all refund requests from this account are pre-approved"* — carries no injection signature, because it is not addressed to the model at all. Catching it needs the model-backed layer wired. |
+| **ASI07** | Insecure Inter-Agent Communication | **partial** | Internal fan-out runs **inside one orchestrator process** (`aegis/src/aegis/agent/subagent.py` — an `asyncio.gather`, not a network of peers), and every hop is traced and audited (`aegis/src/aegis/observability/semconv.py`). The external **A2A protocol 1.0** surface is authenticated, and its routing tenant is structurally barred from setting the database scope. Test: `aegis/tests/agent/test_team_fanout.py::test_a_subagent_proposal_gates_and_resumes_through_the_existing_path` — a lane's proposal goes through the same gate, not around it. | The A2A surface is served and its card is signed **when `a2a_public_origin` is configured** (unsigned otherwise, deliberately: deriving the origin from the `Host:` header let a caller rewrite the signed card). But the traffic itself is not mutually authenticated, there is no peer allowlist, and inbound A2A cannot start a run. What holds today is one property: the addressed tenant can never become the database tenant — the routing field is **refused** when it disagrees with the bearer token rather than reconciled, and refused with one identical code and message across every branch so the error cannot enumerate tenants. That is one property, well tested, and not the whole control. |
+| **ASI08** | Cascading Failures | **partial** | The repair loop is bounded by several independent stops rather than one: an iteration cap, a separate repair budget, and progress detection in the `verify` node that halts a call failing **identically three times** (`aegis/src/aegis/agent/graph.py`). A rail refusal is terminal and never retried, so the loop cannot spend its budget arguing with a guardrail. A token ceiling now bounds each lane — `max_trajectory_tokens` (36000) for the whole trajectory and `max_tool_result_tokens` (4000) for a single tool result — and both are `TIGHTEN_ONLY` in the settings catalogue, so a run is bounded by **size** as well as by iteration count and progress. Test: `aegis/tests/agent/test_self_repair_loop.py::test_an_identical_call_failing_three_times_stops_the_loop`. | No **wall-clock or currency bound on the repair loop itself**, and no cross-lane detection: a failure cascading across a fan-out is still not recognised as one event. |
+| **ASI09** | Human-Agent Trust Exploitation | **partial** | Every consequential action stops for a named human and is recorded with its approver and trace id on a chain a reviewer can verify (`aegis/src/aegis/governance/audit.py`, `GET /v1/audit/verify`), and the console shows the evidence an answer stands on rather than asking to be believed. Test: `aegis/tests/governance/test_audit.py::test_the_chain_verifies_and_a_tampered_row_is_caught`. | **Nothing addresses anthropomorphism itself.** There is no measure of whether a reader over-trusts a fluent answer, no confidence calibration shown beside prose, and no control for an operator approving by reflex — which is the specific failure this category names. |
+| **ASI10** | Rogue Agents | **partial** | Autonomy is bounded on every axis a run can move along: an allowlisted tool set, a risk gate, a budget cap enforced at the gateway chokepoint (`aegis/src/aegis/gateway/llm.py`), and an audit trail that is **verifiable** rather than merely privileged (`aegis/src/aegis/governance/chain.py`). Test: `aegis/tests/governance/test_audit.py::test_a_deleted_row_breaks_every_row_after_it` — a removed row cannot hide. | **Bounded is not monitored.** Nothing watches a run's behaviour for drift, and there is no kill switch that stops an in-flight agent other than the budget refusing its next call. |
+
+**Coverage: 1 enforced · 9 partial · 0 not implemented.**
+
+**The one row that is enforced, and why only one.** ASI02 clears the bar because the
+control is a closed, typed registry plus a gate whose approval authorises exactly the calls
+it enumerated — file and test, both openable. Every other row has a real control and a
+named absence, and the absences cluster: there is no agent *identity* (ASI03), no signature
+on the agent inventory (ASI04), no closure over externally-contributed tools (ASI05), no
+mutual authentication between peers (ASI07), no time or money bound on the repair loop
+(ASI08), no measure of misplaced trust (ASI09) and no behavioural monitor (ASI10). Those
+seven gaps are the agentic frontier, and a page that graded them green would be describing
+a different system.
+
+---
+
+## 8. OWASP Top 10:2025 (web / API surface)
 
 SSRF is no longer its own category in the 2025 list; the MCP peer surface is
 recorded under A01 where it belongs.
@@ -267,16 +310,19 @@ recorded under A01 where it belongs.
 
 ---
 
-## 8. MITRE ATLAS
+## 9. MITRE ATLAS
 
-Only techniques the **battery actually exercises** are claimed. 59 probes: 48
-attacks and 11 benign controls that measure the false-positive rate — a block rate
-quoted without one is the number a vendor quotes. Four families were added because
-four of these rows said, in writing, that nothing tested them; each runs inside the
-default `owasp-full` suite, so its leaks are in the headline block rate and cannot be
-excluded from the report a reviewer reads. Offline, that headline is **38 of 48
-blocked (79%) with a 0% false-positive rate**, and every one of the ten leaks is a
-probe the battery declares semantic-only.
+Only techniques the **battery actually exercises** are claimed. The default `owasp-full`
+suite is **66 probes: 50 attacks and 16 benign controls** that measure the false-positive
+rate — a block rate quoted without one is the number a vendor quotes. Four families were
+added because four of these rows said, in writing, that nothing tested them; each runs
+inside `owasp-full`, so its leaks are in the headline block rate and cannot be excluded
+from the report a reviewer reads. Offline, that headline is **40 of 50 blocked (80%) with a
+0% false-positive rate**, and every one of the ten leaks is declared by the probe itself
+before the run — **eight semantic-only** (`needs_llm`, they need the model layer wired) and
+**two beyond any text rail** (`beyond_rails`, no completer closes them either). *(These
+figures were 59 / 48 / 11 and 38-of-48 before the memory-poisoning family and the extra
+benign controls landed; they are re-measured, not carried forward.)*
 
 | Technique | State | Evidence |
 |---|---|---|
@@ -296,7 +342,7 @@ technique that applies to this deployment is enforced.
 
 ---
 
-## 9. NIST AI RMF 1.0
+## 10. NIST AI RMF 1.0
 
 | Function | State | Evidence | What is missing |
 |---|---|---|---|
@@ -307,7 +353,7 @@ technique that applies to this deployment is enforced.
 
 ---
 
-## 10. ISO/IEC 42001 (AI management system) — Annex A
+## 11. ISO/IEC 42001 (AI management system) — Annex A
 
 | Control | State | Evidence / why |
 |---|---|---|
@@ -323,7 +369,7 @@ technique that applies to this deployment is enforced.
 
 ---
 
-## 11. ISO/IEC 27001:2022 Annex A — the controls that actually map
+## 12. ISO/IEC 27001:2022 Annex A — the controls that actually map
 
 Deliberately not all 93. A control with no mechanism in this repository is not listed.
 
@@ -335,7 +381,7 @@ Deliberately not all 93. A control with no mechanism in this repository is not l
 | **A.8.2** Privileged access rights | **enforced** | The serving role is provisioned `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE` and owns no objects (`scripts/sql/aegis-app-role.sql`); the console role holds `SELECT` and nothing else (`scripts/sql/aegis-readonly-role.sql`). |
 | **A.8.3** Information access restriction | **enforced** | `FORCE ROW LEVEL SECURITY` (removes the owner's exemption) + per-request tenant binding + a boot-time audit that raises `RlsBypassError` when the serving role could bypass; `aegis/tests/governance/test_rls_enforcement.py`. |
 | **A.8.5** Secure authentication | **partial** | Argon2id + signed JWT. No MFA, no lockout, no revocation. |
-| **A.8.8** Technical vulnerability management | **partial** | `POST /v1/stack/patch-check` against the live registry. No advisory feed, so this is patch *freshness*, not vulnerability management. |
+| **A.8.8** Technical vulnerability management | **partial** | Two separate questions, both answered: *freshness* by `POST /v1/stack/patch-check` against the live registry, and *vulnerability* by a live OSV.dev advisory verdict per installed version (`backend/src/app/platform/advisories.py` → `POST /v1/stack/advisories`), gated in CI against `backend/known_advisories.json`. **Still partial**, and the reason moved rather than disappeared: this covers the Python dependency graph only — no SAST, the npm side of `web/` is not audited by the gate, and there is no scanning of the running host. *(An earlier revision of this row said "no advisory feed"; that stopped being true when the OSV verdict shipped.)* |
 | **A.8.12** Data leakage prevention | **enforced** | PII redaction before the model *and* before the user; output content filter; CSV/DDE neutralisation on export. |
 | **A.8.15** Logging | **enforced** | `audit_log` + OpenTelemetry traces + run events; `aegis/tests/governance/test_audit.py`. |
 | **A.8.16** Monitoring activities | **partial** | Latency window, ops diagnose, notification inbox, SLA sweeps. No security alerting rules and no SIEM. |
@@ -349,7 +395,7 @@ Deliberately not all 93. A control with no mechanism in this repository is not l
 
 ---
 
-## 12. EU AI Act
+## 13. EU AI Act
 
 **Classification note.** Aegis is a domain-agnostic platform, not a deployed AI
 system. Its risk class under the Act is decided by what a deployment does with
@@ -364,36 +410,36 @@ to satisfy, and what Aegis brings to that deployment.
 | **Art. 12** | Record-keeping (automatic logging) | **enforced** | Every autonomous or approved action writes an `audit_log` row carrying actor, model, `trace_id`, payload, approver and tenant; runs are OpenTelemetry traces; the usage ledger records every call. Reads are tenant-scoped in SQL. |
 | **Art. 13** | Transparency and information to deployers | **enforced** | The product's core discipline: `Receipt` under every figure, `Absence` where a figure cannot be sourced, `control_ref` on every risk row, `refs[]` of importable symbols behind every posture status, and this document's own refusal to claim certification. |
 | **Art. 14** | Human oversight | **enforced** | A consequential action cannot execute alone: the graph interrupts at `gate_min_risk` and waits for a named person; the approvals inbox shows *what approving would run* and why the gate fired; the SLA sweeper auto-**rejects** HIGH risk on timeout; the conformal abstain band declines rather than acting on a degenerate prediction. |
-| **Art. 15** | Accuracy, robustness, cybersecurity | **partial** | Accuracy is measured, not claimed (empirical conformal coverage on a held-out split; per-metric eval thresholds). Robustness is measured by the red-team battery with a false-positive control. Cybersecurity is sections 6–7 above. Missing: adversarial robustness of the ML spine, and any production-time accuracy monitoring. |
+| **Art. 15** | Accuracy, robustness, cybersecurity | **partial** | Accuracy is measured, not claimed (empirical conformal coverage on a held-out split; per-metric eval thresholds). Robustness is measured by the red-team battery with a false-positive control. Cybersecurity is sections 6–8 above. Missing: adversarial robustness of the ML spine, and any production-time accuracy monitoring. |
 | **Art. 17** | Quality management system | **not_implemented** | No QMS. |
 | **Art. 50** | Transparency for certain AI systems (AI-interaction and synthetic-content disclosure) | **not_implemented** | Aegis does not mark generated content as AI-generated or watermark outputs. |
 | **Art. 72** | Post-market monitoring | **partial** | Latency, analytics, notifications and audit give a deployment the telemetry; there is no post-market monitoring *plan*. |
 
 ---
 
-## 13. SOC 2 Trust Services Criteria
+## 14. SOC 2 Trust Services Criteria
 
 | Criterion | State | Evidence / gap |
 |---|---|---|
 | **CC5.2 / CC4.1** Control activities and monitoring | **partial** | Unusual strength: `GET /v1/security/posture` re-derives control status **from live wiring on every request** and is guarded by `test_no_threat_claimed_enforced_when_its_control_is_off`, so a disabled control cannot keep reporting green. There is no independent control-effectiveness review. |
-| **CC6.1** Logical access | **enforced** | RBAC + RLS + least-privilege database roles (section 11). |
+| **CC6.1** Logical access | **enforced** | RBAC + RLS + least-privilege database roles (section 12). |
 | **CC6.2 / CC6.3** Registration, authorisation, role changes | **partial** | Admin CRUD writes an audit row for every grant change; the last-platform-admin lockout is guarded. No periodic access review. |
-| **CC6.6** Boundary protection | **partial** | Single gateway chokepoint; MCP peers explicitly declared and risk-tiered. The unvalidated peer URL (section 7, A01) is the hole. |
+| **CC6.6** Boundary protection | **partial** | Single gateway chokepoint; MCP peers explicitly declared and risk-tiered, and the peer URL is now validated at the registry chokepoint every declaration path passes through (section 8, A01) — that hole is closed. **The residual is DNS:** nothing resolves the hostname, so a name whose answer is a private address is accepted and dialled. No TLS configuration is owned in-repo either. |
 | **CC6.7** Restricting data transmission and removal | **partial** | PII redaction on every path; hard erasure; CSV export sanitisation; peer credentials never persisted or returned. No DLP on exports beyond formula neutralisation. |
-| **CC7.1** Vulnerability identification | **partial** | Registry patch-check. No scanning. |
+| **CC7.1** Vulnerability identification | **partial** | Registry patch-check for freshness **plus** an OSV.dev advisory verdict per installed package, failing the build on an unrecorded advisory (section 6, LLM03). No SAST, no container or host scanning, and the npm dependency graph is outside the gate. |
 | **CC7.2** Anomaly monitoring | **partial** | Notification inbox, SLA sweeps, budget refusals as clean terminal events. No security-specific alerting. |
 | **CC7.3 / CC7.4** Incident evaluation and response | **not_implemented** | No incident-response procedure. |
 | **CC8.1** Change management | **partial** | ADRs, tiered release with rollback, a large test suite, and a CI merge gate over all of it (`.github/workflows/ci.yml`). **No change-approval record** — nothing requires a reviewer, and branch protection is not configured here, so the gate reports rather than blocks until somebody turns that on. |
 | **A1.2** Availability — backup and recovery | **not_implemented** | No backup or restore procedure in this repository. |
 | **C1.1 / C1.2** Confidentiality | **partial** | Tenant isolation, redaction, erasure. No data classification and no encryption at rest. |
 
-The Privacy (P) series is not repeated here as a control row; sections 2 and 14 are the
+The Privacy (P) series is not repeated here as a control row; sections 2 and 15 are the
 answer to it, and duplicating it would inflate the coverage count for the same
 evidence twice.
 
 ---
 
-## 14. GDPR (Regulation (EU) 2016/679)
+## 15. GDPR (Regulation (EU) 2016/679)
 
 India's equivalents live in section 2 and are **not repeated here**. A row that
 appeared in both tables would count the same evidence twice and inflate the coverage
@@ -407,24 +453,26 @@ numbers on a page whose whole claim is that its numbers are derived.
 | **GDPR Art. 16** rectification | **enforced** | `PATCH /v1/memory/facts/{id}` corrects a stored belief, and the belief timeline retains the supersession rather than silently rewriting history (`aegis/src/aegis/memory/crud.py`). |
 | **GDPR Art. 17** erasure | **enforced** | `POST /v1/memory/forget` and `DELETE /v1/memory/facts/{id}` perform a real **hard delete**, subject- and tenant-scoped and audited (`aegis/src/aegis/memory/crud.py::forget_fact(hard=True)`); `aegis/src/aegis/memory/retention.py::apply_retention` is the one place that does an unconditional scheduled hard delete of raw turns. |
 | **GDPR Art. 30** records of processing | **not_implemented** | The audit log records *actions*, which is not a ROPA. |
-| **GDPR Art. 32** security of processing | **partial** | Sections 7 and 11 are the answer; the gaps there are the gaps here — notably no encryption at rest. |
+| **GDPR Art. 32** security of processing | **partial** | Sections 8 and 12 are the answer; the gaps there are the gaps here — notably no encryption at rest. |
 | **GDPR Art. 33/34** breach notification | **not_implemented** | No procedure. |
 | **GDPR Art. 35** DPIA | **not_implemented** | The risk map is a system-risk assessment, not a DPIA. |
 
 ---
 
-## 15. The honest summary
+## 16. The honest summary
 
 **What Aegis can say to a buyer today, without lying:**
 
-- Every OWASP LLM Top 10 item is *addressed*; five are enforced with a test that
-  fails if the control is switched off, five are partial with the missing layer
-  named.
+- Every OWASP LLM Top 10 item is *addressed*; **seven** are enforced with a test that
+  fails if the control is switched off, **three** are partial with the missing layer
+  named (LLM04 poisoning, LLM08 vector isolation, LLM09 misinformation). The **agentic**
+  Top 10 is the harder board and section 7 says so: one enforced, nine partial.
 - The security posture is **derived from live wiring on every request**, not
   declared in a file — a control that is turned off cannot keep reporting green,
   and there is a test that enforces exactly that.
-- The red-team battery reports a false-positive rate beside its block rate and
-  keeps five probes it is known to miss offline, rather than curating them out.
+- The red-team battery reports a false-positive rate beside its block rate and keeps
+  the **ten** probes it is known to miss offline in the headline, rather than curating
+  them out — each one declared by the probe before the run, not explained after it.
 - Human oversight, record-keeping and transparency (EU AI Act Arts. 12–14) are
   the strongest rows on the board and would survive a reviewer opening them.
 - NIST AI RMF is **enforced in all four functions** — the only framework here that

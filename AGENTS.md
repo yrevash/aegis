@@ -17,11 +17,12 @@ something about the domain, you have gone the wrong way.
 
 | Path | What it is |
 |---|---|
-| `aegis/` | **The importable core.** ~27 subpackages. Knows nothing about any domain. Versioned; see `aegis/PUBLIC.md`. |
+| `aegis/` | **The importable core.** 29 subpackages. Knows nothing about any domain. Versioned; see `aegis/PUBLIC.md`. |
 | `backend/` | The FastAPI composition root. Wires the core to real infrastructure. |
 | `backend/src/app/adapter/` | **The domain seam** — ten pieces, the only thing that changes per domain. |
-| `web/` | The Next.js console. Landing page plus role-scoped portals. |
-| `docs/` | `architecture/system-architecture.md` (the system end to end), `install/`, `teaching/` (one file per module, 29), `adr/`, `security/`, `compliance/`. Index: `docs/README.md`. |
+| `backend/src/app/a2a/` | The Agent2Agent 1.0 surface: the public card, its signing, and the JSON-RPC endpoint. Read its module docstrings before touching it — every one of them records an attack it closes. |
+| `web/` | The Next.js console. Landing page plus five role-scoped portals (`web/src/lib/portal.ts`). |
+| `docs/` | `architecture/system-architecture.md` (the system end to end), `install/`, `teaching/` (one document per `aegis` subpackage, plus one per console persona), `adr/`, `security/`, `compliance/`, `governance/`. Index: `docs/README.md`. |
 | `scripts/` | `bootstrap` · `preflight` · `start`, each as `.sh` and `.ps1`. |
 
 ## Commands
@@ -35,13 +36,18 @@ subshell the second command lands in the first command's directory and fails on
 `cd: no such file or directory`.
 
 ```bash
-# Backend suite  (baseline: 1121 passed, 1 skipped)
+# Backend suite  (baseline 2026-08-28: 2209 passed, 1 skipped)
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
 
-# Core package suite  (baseline: 2247 passed, 14 skipped)
+# Core package suite  (baseline 2026-08-28: 2424 passed, 14 skipped)
 (cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
 
-# Lint — must be clean
+# Lint — must be clean.
+# NOT clean on `main` as of 2026-08-28: 33 findings, almost all `I001` import order
+# plus a few `F401`/`ANN401`, left behind by the A2A, ragas and trajectory-ceiling
+# work. Capture the count BEFORE you start and compare against it, or you will spend
+# an hour attributing someone else's import block to your own edit. Do not `--fix`
+# files you are not otherwise touching; another agent may be in them.
 backend/.venv/bin/python -m ruff check aegis backend
 
 # Console
@@ -121,6 +127,16 @@ These are invariants, not preferences. Each one has a reason and most have a tes
    check fails when a listed word no longer appears in the adapter either).
 6. **Optional dependencies go through `aegis.core.require(extra, module)`**,
    which raises naming the exact `pip install`. Never `except ImportError: pass`.
+7. **A control is not shipped until the caller that matters passes it.** This repo
+   has shipped four *declared-but-unbound* seams — `read_back_for`, the first memory
+   `screen`, `max_tool_result_tokens`, and the memory-write rail — and the pattern was
+   identical every time: the capability was real, tested, and reachable from one
+   caller, and the caller on the hot path passed `None`. When you add an optional
+   hook, bind it on **every** path that can reach it in the same commit, and prove it
+   fired from data rather than from the code reading as if it would. The memory-write
+   rail's proof was one query: `select op, count(*) from memory_write_log group by 1`
+   returned `ADD | 28` and zero `REFUSED`, ever. `backend/src/app/memory/screen.py`
+   exists to make that rail un-forgettable; read its docstring before adding a seam.
 
 ## Conventions
 
@@ -138,10 +154,18 @@ These are invariants, not preferences. Each one has a reason and most have a tes
   gets an entry.
 - **Every HTTP route lives under `/v1`.** The prefix is applied once, in
   `app.main.create_app`; route modules declare bare paths and the console gets the
-  segment from `web/src/lib/api/config.ts`. The three infrastructure probes —
-  `/health`, `/ready`, `/readyz` — stay at the root and are served at exactly one
-  path each, because a liveness URL that moves with the API version 404s halfway
-  through a rollout.
+  segment from `web/src/lib/api/config.ts`. Three families sit outside it, each for a
+  stated reason. The infrastructure probes — `/health`, `/ready`, `/readyz` — stay at
+  the root and are served at exactly one path each, because a liveness URL that moves
+  with the API version 404s halfway through a rollout. The two A2A well-known paths —
+  `/.well-known/agent-card.json` and `/.well-known/jwks.json` — stay at the root
+  because the specification fixes them and registers them with IANA; a well-known URI
+  that is not where the standard says it is has not been served. And the MCP front door
+  is an ASGI **mount** at `/mcp` (client URL `/mcp/mcp`), not a route at all: the SDK
+  hands over a complete application — transport, auth middleware, session manager and
+  its lifespan — and re-hosting that inside a FastAPI route would mean reimplementing
+  the parts we adopted on purpose. The A2A JSON-RPC endpoint *is* a product route and
+  *is* versioned: `POST /v1/a2a`.
 - **Request models carry `extra="forbid"`.** Pydantic's default drops an unknown
   field in silence and answers 200; that has swallowed a request field four times
   in this project. The published schema shows it as `additionalProperties: false`

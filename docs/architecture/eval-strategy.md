@@ -11,8 +11,13 @@ them apart.
 > **The one honesty rule for this doc:** where Aegis ships a *proxy* for a named library,
 > it says so and says why — and where it ships the library itself, it says that instead.
 >
-> **`ragas>=0.4.3,<0.5` IS a dependency** of this repo (`backend/pyproject.toml`), and
-> `aegis.evals.libs` runs its real metrics through the Aegis gateway. This paragraph
+> **`ragas>=0.4.3,<0.5` IS a dependency** of this repo — declared in the `evals-libs`
+> optional-dependency group of `backend/pyproject.toml`, installed in the backend venv,
+> and pinned beside `langchain-community<0.4` because ragas 0.4.3 imports
+> `langchain_community.chat_models.vertexai.ChatVertexAI` at module load and 0.4.2
+> removed it. `aegis.evals.libs` runs its real metrics through the Aegis gateway; the
+> import is lazy, so `aegis.evals` itself never pulls ragas and the offline core stays
+> dependency-free (asserted by `aegis/tests/evals/test_isolation.py`). This paragraph
 > used to assert the opposite, which made it the load-bearing false sentence in the
 > whole document: every "proxy, not the library" claim below inherited its authority
 > from a line that had stopped being true.
@@ -118,12 +123,15 @@ package (`deepeval` is not a dependency):
   *trips* the gate — proving it can actually catch a regression. The thresholds
   (`min_context_precision=0.66`, `min_context_recall=0.95`, `min_groundedness=0.85`) live in
   `backend/src/app/eval/harness.py` (`DEFAULT_THRESHOLDS`).
-- **Being added (design-level):** `backend/src/app/eval/regression.py` — a dedicated
-  DeepEval-style regression module that generalises the gate beyond RAG to **agentic /
-  tool-use** evaluation (per-metric thresholds over trajectory facets, not just the final
-  answer). It formalises what `test_eval_gate.py` does today into a reusable, CI-invokable
-  surface. *This module is described here at the design level; treat its internals as
-  forthcoming.*
+- **Also live:** `aegis/src/aegis/evals/regression.py` (with the backend shim at
+  `backend/src/app/eval/regression.py`) — a dedicated DeepEval-*style* regression module
+  that generalises the gate beyond RAG with declarative per-metric thresholds and a
+  stated direction per metric. It formalises what `test_eval_gate.py` does into a
+  reusable, CI-invokable surface, and it has its own tests
+  (`aegis/tests/evals/test_regression_gate.py`, `backend/tests/eval/test_regression_gate.py`).
+  *An earlier revision of this bullet said "being added … treat its internals as
+  forthcoming", which contradicted the layer table above it saying "both shipped". The
+  table was right.*
 
 **Honest framing.** Real `deepeval` is a **droppable backend** here: because the gate is
 pytest-native and threshold-based, swapping the in-repo proxies for `deepeval`'s metric
@@ -147,8 +155,12 @@ runs.
 - **Phoenix is wired for real.** `backend/src/app/observability/otel.py` registers an
   OpenTelemetry tracer provider that exports `gen_ai.*` spans to a **local, in-process**
   Phoenix instance (`phoenix.otel.register`), degrading to a console exporter when Phoenix
-  is absent. `arize-phoenix` (>=5.0) and `arize-phoenix-otel` are **real dependencies** in
-  `backend/pyproject.toml`. The GenAI semantic-convention attribute keys and the
+  is absent, and it is **off by default** (`PHOENIX_ENABLED`, which `backend/.env` sets to
+  `false`) — wired, flagged, and stated as off rather than silently absent.
+  `arize-phoenix` (**`>=14.6,<15`** — capped because 15+ and especially the 20.x line fail
+  to import here) and `arize-phoenix-otel` (`>=0.6`) are **real dependencies** in
+  `backend/pyproject.toml`. *(Corrected: this line said `>=5.0`.)* The GenAI
+  semantic-convention attribute keys and the
   OpenInference span kinds Phoenix renders (AGENT / CHAIN / TOOL / RETRIEVER / RERANKER /
   GUARDRAIL / LLM / EMBEDDING) are centralised in
   `backend/src/app/observability/semconv.py`. Note the honest detail there: the
@@ -210,12 +222,20 @@ cd backend && python -m app.eval.regression
 cd backend && TAIF_EVAL_LLM_JUDGE=1 python -m pytest tests/eval -q
 ```
 
-> There is **no** GitHub Actions workflow or `Makefile` in this repo today — the "CI gate"
-> is the pytest suite above, run as the project's standing verification command:
-> `python -m pytest tests -q` and `ruff check src tests` must stay green (see
-> `docs/learn/50-run-and-extend.md` §4). Layer 3 (`trace_eval`) runs automatically, post-run and best-effort, as
-> part of the live LLM-Ops loop; Phoenix's local UI is launched by
-> `app.observability.otel.init_observability` when `arize-phoenix` is installed.
+> **There is a CI workflow now, and this paragraph used to say there wasn't.**
+> `.github/workflows/ci.yml` runs on every push to `main` and every pull request: ruff as
+> its own fast job, then the backend and `aegis` suites against a real PostgreSQL service,
+> `tsc --noEmit`, the web suite and the OpenAPI snapshot check. It gates **tests, not
+> supply chain** — no dependency scanning, no SAST, no provenance — and nothing configures
+> branch protection to require it, so today it reports rather than blocks. There is still
+> no `Makefile`; the standing local verification command is unchanged
+> (`python -m pytest tests -q` and `ruff check src tests`), and
+> [`../operations/runbook.md`](../operations/runbook.md) is where the run/extend
+> instructions live — the `docs/learn/` path this line used to cite no longer exists.
+> Layer 3 (`trace_eval`) runs automatically, post-run and best-effort, as part of the live
+> LLM-Ops loop; Phoenix's local UI is launched by
+> `app.observability.otel.init_observability` when `arize-phoenix` is installed **and**
+> `PHOENIX_ENABLED` is on.
 
 ---
 

@@ -244,6 +244,14 @@ its JVM from underneath it is how an instance ends up needing repair.
 | 3 | API alive | `curl http://127.0.0.1:8000/health` | `{"status":"ok"}` |
 | 4 | Console | open `http://localhost:3000` | the login page |
 | 5 | Backend suite | `cd backend; .venv\Scripts\python -m pytest -q` | all pass |
+| 6 | Login | `curl -s -X POST http://127.0.0.1:8000/v1/auth/login -H "content-type: application/json" -d "{\"username\":\"northwind.admin\",\"password\":\"demo\"}"` | a body with a **`token`** field (not `access_token`) |
+| 7 | A2A discovery | `curl http://127.0.0.1:8000/.well-known/agent-card.json` | `"protocolVersion":"1.0"`, all three `capabilities` `false` |
+| 8 | AgBOM | `curl http://127.0.0.1:8000/v1/platform/agbom` | CycloneDX 1.6, 25 components, `application/vnd.cyclonedx+json` |
+| 9 | Audit chain | `curl http://127.0.0.1:8000/v1/audit/verify` (bearer from 6) | the chain verifies, or names the first break |
+
+Checks 7–9 are also the **Interop** screen in the console, under `platform_admin`,
+`ai_team` and `devops`. That page probes the running deployment live rather than
+printing a stored claim, so it goes quiet when a surface stops answering.
 
 ---
 
@@ -298,7 +306,9 @@ Phoenix runs **in-process** (a pip dependency) — nothing to install separately
 > ```
 >
 > `scripts/preflight.sh` does **not** probe Temporal and will report "all UP" while it
-> is down. The Windows runbook in `docs/install/02-services.md` covers installing it.
+> is down. §2.6 above covers installing it; `docs/install/02-bootstrap.md` is the
+> cross-platform version. (This line used to point at `docs/install/02-services.md`,
+> which does not exist.)
 
 ---
 
@@ -476,13 +486,26 @@ Run the API:
 uvicorn app.main:app --reload --app-dir src   # → http://localhost:8000
 ```
 
-- OpenAPI docs: <http://localhost:8000/docs>
-- **Agent:** `POST /auth/login` (JWT), `POST /query` (SSE), `GET /graph`,
-  `POST /ml/explain`, `GET /metrics`, `GET /audit`.
-- **Approvals inbox (async HITL, admin):** `GET /approvals`,
-  `POST /approvals/{id}/decision`, plus the live `POST /approval`.
-- **Admin governance:** `GET /admin/tenants` (platform-admin),
-  `GET /admin/users`, `GET|POST /admin/budgets`, `GET /admin/usage` (tenant-scoped).
+**Every product route is under `/v1`.** The prefix is applied once, in
+`app.main.create_app`, so a path written without it 404s. Five paths sit outside it and
+all five are deliberate: the probes `/health`, `/ready` and `/readyz` (a liveness URL
+that moves with the API version 404s halfway through a rollout) and the two A2A
+well-known paths, whose location the specification fixes. The committed
+`backend/openapi.json` is the authority for all 122 documented routes.
+
+- OpenAPI docs: <http://localhost:8000/docs> (at the root — not a versioned route)
+- **Agent:** `POST /v1/auth/login` (JWT — the field is `token`), `POST /v1/query` (SSE),
+  `GET /v1/graph`, `POST /v1/ml/explain`, `GET /v1/metrics`, `GET /v1/audit`.
+- **Approvals inbox (async HITL, admin):** `GET /v1/approvals`,
+  `POST /v1/approvals/{id}/decision`, plus the live `POST /v1/approval`.
+- **Admin governance:** `GET /v1/admin/tenants` (platform-admin),
+  `GET /v1/admin/users`, `GET|POST /v1/admin/budgets`, `GET /v1/admin/usage`
+  (tenant-scoped).
+- **Interoperability:** `GET /.well-known/agent-card.json`,
+  `GET /.well-known/jwks.json`, `POST /v1/a2a` (A2A 1.0 — `SendMessage`, `GetTask`),
+  `/mcp/mcp` (MCP over Streamable HTTP — an ASGI mount, not a `/v1` route; server
+  name `aegis-adapter-tools`),
+  `GET /v1/platform/agbom` (CycloneDX 1.6), `GET /v1/audit/verify`.
 
 ### 3. Console against the live backend
 
@@ -552,6 +575,35 @@ RLS) and the per-tenant screens have something to render. Tenant/user/budget man
 under `/admin/*` (platform-admin: tenants; tenant-admin: own users/budgets/usage). See ADR
 0008, `backend/src/app/seed.py` and `backend/src/app/api/routes.py`.
 
+### The two things about these accounts that cost real debugging time
+
+**1. Only the tenant accounts own documents.** `admin`, `ai`, `aiteam`, `devops` and
+`client` are seeded with `tenant_id = None`. The seeder attaches its three documents per
+tenant to Northwind and to Vertex, and to nothing else — so a retrieval query run as
+plain `admin` correctly comes back with **zero candidates**. That is row-level security
+doing its job, not an empty index, a broken ingest or a missing embedding. Before
+concluding retrieval is broken, sign in as `northwind.admin` and ask the same question.
+Note what those three rows *are*, though: short seeded bodies, not an ingested corpus. They
+give retrieval something tenant-scoped to find; a real demo still wants documents uploaded
+and run through the ingestion workflow, which needs Temporal (§2.6).
+Nothing about this is a fallback and nothing degrades quietly; the isolation is the
+feature, and it only looks like a bug because the account that can see nothing is also
+the account that can see every *screen*.
+
+**2. The login response field is `token`, not `access_token`.** `POST /v1/auth/login`
+returns `{"token": …, "role": …, "fine_role": …, "tenant_id": …, "user_id": …}`, and
+`token` and `role` are the two required fields. Reaching for `access_token` — the name
+every other JWT tutorial uses — yields `undefined`, and the request that follows fails as
+a 401 that looks like bad credentials rather than as a bad client. The schema is
+`LoginResponse` in `backend/src/app/api/schemas.py`, and the committed
+`backend/openapi.json` is the authority:
+
+```bash
+curl -s localhost:8000/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"northwind.admin","password":"demo"}' | python -m json.tool
+```
+
 The **async approvals inbox** (durable HITL, ADR 0005): a gated run persists a `PENDING`
 row; an admin lists it at `GET /approvals` and resolves it out-of-band at
 `POST /approvals/{id}/decision` — the run resumes from its checkpoint and the tool runs
@@ -564,25 +616,56 @@ exactly once.
 **Backend — tests + lint** (from `backend/`, venv active):
 
 ```bash
-python -m pytest tests -q      # expect: 266 passed, 1 skipped (the opt-in LLM-judge)
-ruff check src tests           # expect: All checks passed!
-ruff format --check src        # formatting
+# From the repository root, so both packages are importable:
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
+# 2026-08-28: 2209 passed, 1 skipped (the opt-in LLM-judge)
+(cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
+# 2026-08-28: 2424 passed, 14 skipped
+backend/.venv/bin/python -m ruff check aegis backend
 ```
+
+> **Record the numbers you actually get, not the ones printed here** — they only ever
+> grow, and a doc's count is stale the moment a test lands. What matters is that your
+> second run is at least as green as your first. `ruff` is **not** clean on `main` as of
+> 2026-08-28 (33 findings, nearly all import ordering); capture the count before you
+> change anything so you do not spend an hour owning someone else's import block.
 
 > The offline **quality gate** runs here too (`tests/eval/test_eval_gate.py`): it drives
 > the real hybrid retrieval path over a fixed seed corpus and **fails** if
-> context-precision/recall or groundedness regress below threshold. Set
-> `TAIF_EVAL_LLM_JUDGE=1` to additionally run the reasoning-model LLM-as-judge pass.
+> context-precision/recall or groundedness regress below threshold. It uses
+> deterministic lexical proxies — token and substring overlap, no model call and no
+> network — which is what lets it run in CI. Set `TAIF_EVAL_LLM_JUDGE=1` to additionally
+> run the reasoning-model LLM-as-judge pass.
 
-> First `pytest` run is slow (~30–60s) because SHAP/XGBoost trigger a one-time
-> numba JIT compile; subsequent runs are ~2s.
+> **The offline gate is not the only evaluator, and the other one costs money.** `ragas`
+> is a real dependency (`ragas>=0.4.3,<0.5`), and `aegis/src/aegis/evals/libs/ragas_suite.py`
+> runs the genuine library — about nine gateway calls per case (five completions and four
+> embeddings), every one budget-checked,
+> traced and written to `usage_ledger`, because an evaluation subsystem whose spend is
+> invisible to the platform's own cost surface would be the one place the metering claim is
+> false. It is a separate, explicitly triggered path; nothing on a dashboard poll reaches
+> it. **DeepEval is deliberately not installed**: it pins `click>=8.0.0,<8.4.0` while
+> `huggingface_hub` requires `click>=8.4.2`, and the two ranges are disjoint. Do not try to
+> resolve it — there is no version pair that satisfies both.
+
+> The **backend** suite takes about four minutes on this machine and the **core** suite
+> about two and a half; a first run adds ~30–60s while SHAP/XGBoost trigger a one-time
+> numba JIT compile. **Do not run two backend suites concurrently against one Postgres** —
+> a lane wedges on a `TRUNCATE` blocked by an `idle in transaction` session and looks
+> exactly like a code deadlock. Check `pg_stat_activity` before believing otherwise.
 
 **Console — build + lint** (from `web/`):
 
 ```bash
-npm run build  # next build (TypeScript strict) — expect clean
+npm run build  # next build (TypeScript strict) — 2026-08-28: 70/70 pages
+npm test       # node:test — 2026-08-28: 406 passed
 npm run lint   # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 ```
+
+`next lint` prints five `no-unused-vars` **warnings** on `main`. Warnings do not fail the
+build; **errors** do, and `next build` runs the same lint pass, so an ESLint error in any
+file under `web/src` stops the build before a single page is generated. If `npm run build`
+stops at "Failed to compile" with a lint list and no page table, that is what happened.
 
 ---
 

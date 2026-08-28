@@ -393,11 +393,22 @@ async def find_requests(args: dict, ctx: ToolContext) -> ToolActionResult:
 
     Returns:
         A :class:`ToolActionResult` whose ``summary`` is one line per matching request
-        — id, status, priority, category, assignee, age against SLA, title. ``ok`` is
-        False **only** when nothing matched: an empty shortlist is a round that did not
-        advance the goal, and reporting it as such is what lets the graph's bounded
-        self-repair loop widen the filter and try again rather than answering "none"
-        from a filter that was simply too narrow. ``changed`` is always False.
+        — id, status, priority, category, assignee, age against SLA, title.
+
+        ``ok`` is True when the query ran, **including when it matched nothing**. This
+        docstring described the opposite, and so did the code: an empty shortlist
+        returned ``ok=False`` so the bounded self-repair loop would widen the filter.
+        The intent was reasonable; the mechanism was not. ``verify``'s deterministic
+        tier reads a failed tool call as FAILED and repairable, so the loop fired
+        against an answer that was already correct — measured at 3 rounds, 15 tool
+        calls and **$0.1244** on a question fully answered in round one. "No requests
+        match" is frequently the complete answer.
+
+        Broadening is still prompted: the summary says so, and a planner can act on it.
+        What it no longer does is tell the verifier a working query failed.
+
+        ``ok`` is False only for a real failure — a store that cannot enumerate at all,
+        or a named request that does not exist. ``changed`` is always False.
     """
     parsed = FindRequestsArgs.model_validate(args)
     lister = getattr(ctx.store, "list_requests", None)

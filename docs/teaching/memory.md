@@ -38,7 +38,9 @@ flowchart TD
         P --> C{every 4th turn}
         C -->|yes| J[enqueue consolidation job]
         J --> EX[extract candidate facts]
-        EX --> RE{near-duplicate}
+        EX --> SC[check_memory_write screens the candidate]
+        SC -->|BLOCK| RF[refused, logged, never stored]
+        SC -->|pass or redact| RE{near-duplicate}
         RE -->|yes| NO[bump access_count, no model call]
         RE -->|no| DE[add / update / invalidate / noop]
         DE --> AP[bitemporal apply, never a hard delete]
@@ -94,6 +96,28 @@ synchronously so a redeploy cannot lose the work, and through an in-process
 sweeper. Reconciliation short-circuits: a candidate whose nearest existing
 fact is at cosine `>= 0.97` with the same predicate is a duplicate — bump
 `access_count`, log a `NOOP`, no second model call.
+
+**Every candidate fact is screened before it can be stored.**
+`aegis.guardrails.Guardrails.check_memory_write` runs the inbound rail chain over
+the extracted fact — the rendered text *and* the subject/predicate/object triple —
+and returns the rewritten field values, so a redaction actually lands in the row.
+A `BLOCK` writes a `REFUSED` row to `memory_write_log` and stores nothing.
+
+This is not the input rail repeated. The input rail judges the user's raw turn;
+this rail judges what the extractor decided was worth remembering, which can be a
+directive that appeared nowhere in the turn it read. And a fact is written once
+and then recalled into every later prompt, so an unscreened write is a
+prompt-injection payload with a far longer half-life than the message that
+produced it.
+
+**Both drain paths bind the same screen**, through `app.memory.screen.memory_write_screen`.
+That module exists because the screen used to be private to `app.main` and passed
+only to the 60-second sweeper, while `AgentDeps._run_consolidation` — the drain the
+live loop actually fires — called `sweep_pending` with no `screen=`, and
+`consolidate` skips the rail entirely when the screen is `None`. The hot path
+drained in 20–160 ms with `attempts=1` and won the race every time, so the rail
+never fired: `memory_write_log` held 28 `ADD` rows and zero `REFUSED`. A rail the
+production path does not pass is not a guardrail.
 
 **Forgetting has two distinct mechanisms.** `consolidate.prune_forgotten`
 soft-forgets: a fact below the confidence floor (`0.05`), never accessed and
@@ -192,7 +216,8 @@ The recall and budget knobs (`k_fact`, `n_fact`, `consolidation_every_n`,
 | `aegis/src/aegis/memory/recall.py` | the six recall arms and the shared `_tenant_clause` |
 | `aegis/src/aegis/memory/working.py` | `assemble_working_memory()` and the layout/eviction order |
 | `aegis/src/aegis/memory/scoring.py` | the pure scoring formula, no I/O |
-| `aegis/src/aegis/memory/consolidate.py` | extract, reconcile, bitemporal apply, soft-forget |
+| `aegis/src/aegis/memory/consolidate.py` | extract, screen, reconcile, bitemporal apply, soft-forget |
+| `backend/src/app/memory/screen.py` | `memory_write_screen` — the one memory-write rail both drain paths bind |
 | `aegis/src/aegis/memory/retention.py` | the only unconditional hard delete |
 | `aegis/src/aegis/memory/vector_ops.py` | Qdrant search for facts and episodic turns |
 | `aegis/src/aegis/memory/scope.py` | the session-level tenant scope binding |

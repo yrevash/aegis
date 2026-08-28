@@ -1,20 +1,50 @@
 # Where Aegis stands
 
-Last updated 2026-08-24. The hackathon starts **2026-08-30**.
+Last updated 2026-08-28. The hackathon starts **2026-08-30**.
 
 ## Status
 
 **Phases 1–10 complete and audited.** Phase 11 (Langflow) is parked by decision —
 `docs/dev_new_docs_v2/phase-11-langflow.md` says so and nothing may take a dependency on it.
 
-Verified on a quiet tree:
-`backend 2112 passed / 1 skipped · aegis 2388 passed / 14 skipped · web 370 · ruff clean ·
-tsc clean · openapi current`
+Verified on a quiet tree, 2026-08-28:
+`backend 2209 passed / 1 skipped · aegis 2424 passed / 14 skipped · web 406 passed ·
+tsc clean · next build 70/70 pages · openapi current`
 
-Compliance: **37 of 114 mapped controls enforced** · 53 partial · 19 not implemented · 5 not
-applicable. Two frameworks enforced in every control that applies here — **NIST AI RMF** (4 of
-4) and **MITRE ATLAS** (9 of 9 applicable; `AML.T0018` cannot apply, no downloaded model
-artefact exists). The public band derives that list; nothing names a framework in code.
+**`ruff` is no longer clean: 33 findings** — nearly all `I001` import order, plus a few
+`F401` and `ANN401`, left by the A2A, ragas and trajectory-ceiling work. None is a defect;
+all of it is one `ruff check --fix` plus three hand edits. Do it in its own commit, and
+capture the count before you start so nobody attributes it to their own edit.
+
+Compliance: **38 of 124 mapped controls enforced** · 62 partial · 19 not implemented · 5 not
+applicable, across **13** frameworks. One framework is enforced in every control it maps —
+**NIST AI RMF** (4 of 4). **MITRE ATLAS** is 9 of 10 with the tenth `not_applicable`
+(`AML.T0018` cannot apply — no downloaded model artefact exists), so it is complete over
+what applies but does not satisfy the `enforced == total` test that drives the public band.
+The band derives its own list; nothing names a framework in code.
+
+### Landed since 2026-08-24
+
+- **A2A 1.0**: `/.well-known/agent-card.json`, `/.well-known/jwks.json`, `POST /v1/a2a`
+  (`SendMessage`, `GetTask`). Card capabilities all `false`; unsigned unless
+  `a2a_public_origin` is set; the routing `tenant` field never sets DB scope and a mismatch
+  refuses identically so errors cannot enumerate tenants.
+- **AgBOM**: `GET /v1/platform/agbom`, CycloneDX 1.6, 25 components, content-derived
+  `serialNumber`.
+- **Interop screen** at `/app/{platform_admin,ai_team,devops}/interop` — A2A, MCP,
+  CycloneDX and OpenTelemetry, with a live probe rather than a stored claim.
+- **`verify` node** between `act` and `reflect`, three tiers; `reflect` closes back to
+  `plan`; oscillation stops at the third identical failing attempt.
+- **Two token ceilings**, `agent.max_trajectory_tokens` (36000) and
+  `agent.max_tool_result_tokens` (4000), bound on the main graph *and* the sub-agent lanes,
+  tenant-tightenable; `SubAgentStatus.CEILING` is now on the wire.
+- **The memory-write rail is bound on both drain paths** (`app/memory/screen.py`) — it had
+  never fired.
+- **Hash-chained `audit_log`** with `GET /v1/audit/verify`.
+- **MCP server renamed** `tcs-adapter-tools` → `aegis-adapter-tools`.
+- **`find_requests` returns `ok=True` on an empty result set.** As `ok=False` it read to
+  `verify` as a repairable failure: one measured run spent 3 rounds, 15 tool calls, 68,836
+  prompt tokens and **$0.1244** repairing a correct answer.
 
 ## The working rule for every phase
 

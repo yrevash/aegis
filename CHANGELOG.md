@@ -29,6 +29,93 @@ the tree is listed here.
 
 ### Added
 
+- **The A2A (Agent2Agent) 1.0 surface.** `GET /.well-known/agent-card.json`,
+  `GET /.well-known/jwks.json` and `POST /v1/a2a` — JSON-RPC with two methods in
+  the 1.0 PascalCase spelling, `SendMessage` and `GetTask`. The two well-known
+  paths are served at the **root**, not under `/v1`, because the specification
+  fixes them and registers them with IANA: a well-known URI that is not where the
+  standard says it is has not been served. Three properties of this surface are
+  contract, not implementation detail, and each closes something specific:
+  - **The card's `capabilities` are all `false`.** `streaming` and
+    `extendedAgentCard` were `true` while naming methods that answer
+    `-32601 method not found`. A peer routes its call on these flags, so an
+    unearned `true` is worse than a `false`.
+  - **The published origin comes from `a2a_public_origin` and never from
+    `request.base_url`.** The old reading honoured the `Host` header: a request
+    carrying `Host: evil.com` came back with a card, signed by this platform's
+    real key, whose interface URL and whose `jku` — inside the *signed* protected
+    header — both pointed at the attacker, cacheable for five minutes. With no
+    configured origin the card is served unsigned with relative URLs rather than
+    signed over a guess.
+  - **A2A's `tenant` field never sets database scope.** It is an opaque routing
+    identifier that arrives before authentication and is entirely
+    caller-controlled; Aegis's tenancy is a Postgres GUC set from a verified
+    bearer token. A disagreement is refused rather than reconciled, and the
+    refusal is identical whichever tenant was named, so the error cannot be used
+    to enumerate tenants. The card's `securitySchemes` description says so in the
+    document itself.
+
+  Written against the 1.0 specification rather than taken from `a2a-sdk` 1.1.2,
+  which resolves only by downgrading protobuf from 7.35.1 to 6.33.6 underneath
+  Temporal and ONNX Runtime — survivable, and still a blast radius far larger
+  than the one JSON document and two RPC methods it buys.
+- **`GET /v1/platform/agbom`** — the agent bill of materials, CycloneDX 1.6, 25
+  components, served as `application/vnd.cyclonedx+json` rather than
+  `application/json` so a CycloneDX consumer can content-negotiate it. The
+  document is deterministic apart from `metadata.timestamp`, and its
+  `serialNumber` is derived from the content: two builds of the same platform
+  produce the same identifier, and a changed component changes it.
+- **A hash-chained `audit_log`, and `GET /v1/audit/verify` to walk it.** Each row
+  carries `prev_hash` and `row_hash = H(prev_hash || row)`, with a literal
+  `GENESIS` marker rather than `NULL` on the first row of a chain; the endpoint
+  reports the first break or reports none, and is scoped exactly like `GET
+  /v1/audit` — a tenant-bound caller verifies its own chain. "Append-only" was a
+  property of how the table was written; this makes it a property a reader can
+  check.
+- **`ragas>=0.4.3,<0.5` is a real dependency, and there are now two evaluators
+  doing two different jobs.** `aegis/src/aegis/evals/libs/ragas_suite.py` runs the
+  genuine library over the seed corpus — about nine gateway calls per case (five
+  completions, four embeddings), every one budget-checked, rate-limited, traced
+  and written to `usage_ledger`, because an evaluation subsystem whose spend is
+  invisible to the platform's own cost surface would be the one place the metering
+  claim is false. It is an explicitly triggered path; no dashboard poll reaches
+  it. The offline gate in `aegis/src/aegis/evals/metrics.py` is unchanged and
+  stays deterministic — lexical proxies, no model, no network — which is what lets
+  it run in CI. `langchain-community` is pinned below 0.4 for it. **DeepEval is
+  not installed and cannot be:** it requires `click>=8.0.0,<8.4.0` while
+  `huggingface_hub` requires `click>=8.4.2`, and the ranges are disjoint.
+- **Two agent token ceilings, as settings-catalogue keys.**
+  `agent.max_trajectory_tokens` (default 36000, bounds 2000–200000) caps one
+  lane's whole trajectory before its next model call;
+  `agent.max_tool_result_tokens` (default 4000, bounds 200–32000) caps a single
+  tool result's contribution to it — the bound that bites first in practice,
+  because a run's real exposure is one unbounded result, not a long conversation.
+  Both are `TIGHTEN_ONLY`, so a tenant may lower them and never raise them, and
+  both are enforced on the **main graph and on every sub-agent lane**: the second
+  binding is the point, because `max_tool_result_tokens` shipped once bound on
+  only one of the two. Truncation is marked in the prompt and the full text stays
+  on the run record, so the model loses the tail and the audit does not. The
+  36000 came from two measured samples (peak 11,859 tokens per lane, 2026-08-27);
+  that is thin, it is recorded as thin, and it should be revisited against a real
+  workload.
+- **A `verify` node between `act` and `reflect`**, and with it the `verification`
+  stream event carrying `outcome`, `method`, `reason`, `repairable` and
+  `evidence`. `act` no longer reports its own success — the judge it replaces
+  asked `all(r["ok"])` of values the tools reported about themselves, so a tool
+  that updated the wrong record and returned `ok=True` was "goal met". Three
+  tiers, cheapest first: `deterministic` (the rows and rail verdicts decide it),
+  `read-back` (one read-only call below the gate proves the write landed), then a
+  single reasoning call only where neither settled it — reported as
+  `unverifiable` where nothing in the deployment can confirm it. There is
+  deliberately **no self-critique tier**.
+- **The Interop console screen**, at `/app/{platform_admin,ai_team,devops}/interop`
+  — A2A, MCP, CycloneDX and OpenTelemetry, with every endpoint printed in full so
+  a reader can check it. The A2A block is a **live probe, not a claim**: version,
+  interfaces and skills are read from the running deployment on mount, so a card
+  that stops answering leaves the page saying nothing rather than continuing to
+  advertise. These were the only capabilities in the platform with no surface at
+  all — real, tested, served, and invisible unless someone thought to curl a
+  well-known path.
 - **`aegis/PUBLIC.md`** — the public/internal boundary. Three tiers, 50 Stable
   names out of 700+ exported, and a stated reason for everything left internal.
   Read by `aegis/tests/core/test_public_surface.py`, so a rename fails the suite
@@ -84,6 +171,21 @@ the tree is listed here.
 
 ### Changed
 
+- **The MCP server is named `aegis-adapter-tools`.** It was `tcs-adapter-tools`.
+  **Breaking for any MCP client that pins the server name:** the value appears in
+  `serverInfo.name` on `initialize` and in
+  `result._meta["io.modelcontextprotocol/serverInfo"]` on every tool result. A
+  platform whose central claim is that it is domain-agnostic cannot introduce
+  itself to every connecting client under one customer's initials.
+- **`agent_status` gained `ceiling` on the wire.** The `status` field is now
+  `started` | `thinking` | `acting` | `done` | `failed` | `timeout` | `ceiling`,
+  and the last two are **designed** terminal states rather than errors. `ceiling`
+  was missing from the enum for a release: a lane cut at its trajectory ceiling
+  emitted `done`, so the console drew a truncated lane exactly like a complete
+  one, and the only record of the truncation lived in a field nothing rendered.
+  A `SubAgentStatus.CEILING` lane keeps the findings it had reached and is named
+  as such in the synthesis. **Additive for a consumer that switches on the enum,
+  breaking for one that exhausts it.**
 - **The domain seam gained the four things the core was deciding for it** (phase 8,
   after the retarget rehearsal). `personas.PERSONA_BY_ROLE` / `persona_for_role`
   (the host's login path chose between two hardcoded persona ids, so re-voicing
@@ -177,6 +279,38 @@ the tree is listed here.
 
 ### Fixed
 
+- **`find_requests` returns `ok=True` for an empty result set.** It returned
+  `ok=False`, and `verify`'s deterministic tier reads a failed tool call as
+  `FAILED` and repairable — so the self-repair loop fired against a *correct*
+  answer. Measured on one such run: **3 rounds, 15 tool calls, 68,836 prompt
+  tokens, $0.1244**, on a question that was fully answered after round one. "No
+  requests match" is the answer to "are there any?", not a failure to determine
+  it. `changed=False` still says nothing was written, which is the flag that
+  actually guards side effects. **Behavioural change for any caller branching on
+  `ok`:** an empty shortlist is now a success.
+- **The memory-write rail is bound on both drain paths.** The screen was defined
+  privately in `app.main` and passed only to the 60-second backstop sweeper, under
+  a comment reading *"a screen the production path does not pass is not a
+  guardrail, it is a guardrail-shaped hole"* — and the production path did not
+  pass it. `AgentDeps._run_consolidation`, the drain the live agent loop fires
+  after every turn, called `sweep_pending` with no `screen=`, and `consolidate`
+  skips the rail entirely when the screen is `None`. The hot path also wins the
+  race every time: measured, each job drained in 20–160 **milliseconds** with
+  `attempts=1`, while the screened sweeper runs on a 60-second timer and can never
+  claim a job already `DONE`. The proof it had never fired was one query —
+  `select op, count(*) from memory_write_log group by 1` returning `ADD | 28` and
+  zero `REFUSED`, ever. The rail now lives in `backend/src/app/memory/screen.py`,
+  owned by neither drain, so there is no longer "the other one's" screen to
+  forget. This was the **fourth** declared-but-unbound seam in this codebase,
+  after `read_back_for`, the first memory `screen`, and
+  `max_tool_result_tokens`.
+- **The agent loop stops oscillating.** Three identical failing attempts is the
+  stuck threshold, and the check runs *inside* the failure path rather than before
+  it. A repeated call fingerprint on its own is not oscillation — retrying an
+  identical call after a transient failure is exactly the repair this loop exists
+  to perform, and the retry that finally succeeds carries the same fingerprint as
+  the attempt that failed. Condemning the second identical try would refuse to
+  repair precisely the failures most worth repairing.
 - **A retarget can no longer pass every suite while being broken.** `pytest --pyargs
   aegis.conformance` is fourteen checks, not thirteen: the new one reads the **core**
   rather than the adapter and fails when any module outside

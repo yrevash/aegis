@@ -55,11 +55,12 @@ an hour later and a figure that existed for one HTTP connection:
 `recall`, `fuse`, `rerank`, `spotlight`, `assemble`, `agentic` (conditional).
 Everything it produces is a `result` field.
 
-**The agent pipeline, seventeen stages.** `guard_input`, `route`,
+**The agent pipeline, eighteen stages.** `guard_input`, `route`,
 `answer_memory`, `recall_memory`, `plan_team` (conditional), `run_team`
 (conditional), `synthesize` (conditional), `retrieve`, `plan`, `gate`, `approval`
-(conditional), `act`, `reflect`, `generate`, `guard_output`, `stream`,
-`persist_memory`. This is the graph's **node set**, not a path — one turn runs one
+(conditional), `act`, `verify`, `reflect`, `generate`, `guard_output`, `stream`,
+`persist_memory`. `verify` sits between `act` and `reflect` and is what decides
+the round against something outside the model. This is the graph's **node set**, not a path — one turn runs one
 lane through it, and the edges that decide which lane are served from the
 compiled graph by `GET /v1/agent/topology`.
 

@@ -5,6 +5,11 @@
 > `northwind.client` and `vertex.client`. Every figure quoted is what those two accounts
 > showed on that day. Where a claim could not be checked by looking, it says "not
 > verified".
+>
+> **Refreshed against the code on 2026-08-28** for the changes that landed since: the
+> closed-by-default listings, the two new agent settings, and the compliance totals.
+> Passages marked *"read from the code, not re-walked"* were checked against the
+> component or the endpoint rather than by looking at a running box.
 
 **Who this portal is for.** The tenant's end user. Not the person who runs Aegis, not
 the person who administers the tenant, not the person who tunes the agent. Somebody who
@@ -12,10 +17,12 @@ wants to ask the system a question and then wants four things answered about it:
 did it cost me, what is it doing, what needs my decision, and what does it know about
 me.*
 
-**It is the narrowest portal in the product, and that is the pitch.** Eleven sections.
-Every one of them is either the client's own question, the client's own money, the
-client's own documents, or the client's own governance record. Nothing here is somebody
-else's screen shown read-only. Say that out loud before you click anything.
+**It is the narrowest portal in the product, and that is the pitch.** Ten sections —
+and it is the only portal that did *not* grow one when **Interop** was added, because a
+client does not publish this deployment's standards to anybody. Every section is either
+the client's own question, the client's own money, the client's own documents, or the
+client's own governance record. Nothing here is somebody else's screen shown read-only.
+Say that out loud before you click anything.
 
 ---
 
@@ -31,6 +38,16 @@ else's screen shown read-only. Say that out loud before you click anything.
 The isolation demo is: open the same section as each, side by side. It works properly on
 **Savings** and **Documents**. It does **not** work on **Overview** — see the warning
 below, because a jury doing exactly this comparison will land on Overview first.
+
+**Never demo this portal as the plain `client` account.** It is a real seed row, and it
+carries `tenant_id: NULL`: it signs in fine and then every tenant-scoped screen is
+correctly empty, because there is no tenant to scope to. It owns no documents and no
+ledger rows. That is why `client` and `ai` were removed from the login page's quick-in
+buttons — the client overview showed a dash for *"Your spend"* while `northwind.client`
+had **2,653** ledger rows behind it, and a reviewer reads an empty screen as broken
+software rather than as the wrong account. Both tenant-bound clients are on the button
+list precisely so the side-by-side comparison is one click each. *(Read from
+`web/src/app/login/page.tsx` and `backend/src/app/seed.py`, not re-walked.)*
 
 ### The nav, as rendered
 
@@ -53,6 +70,21 @@ regroups it. Either order is fine to walk — this guide follows the catalogue.)
    [§10](#10-access-demo--not-on-this-portal-on-purpose).
 
 The first is not fatal, and is much worse if a jury finds it first.
+
+### Listings open closed — know this before you click
+
+*(DESIGN.md §4; read from the code, not re-walked.)* Every panel whose body is a
+list of rows — documents, approvals, memory facts — opens as **one bar** carrying
+its title, its row count and one key figure:
+
+    Documents                                    10 rows · 7 ingested
+
+**Hover expands it; click pins it open**, and the pin survives the pointer leaving.
+One surface per page stays open — the thing the page is named after; on Documents
+that is the upload control and the corpus figures, and the document list closes.
+The rows are collapsed, **never `display:none`**: they stay in the accessibility
+tree and reachable by keyboard, and each trigger is a real `<button>` carrying
+`aria-expanded`.
 
 ---
 
@@ -799,8 +831,10 @@ Aegis uses its own `AA-0x` identifiers here for that reason.
 ### Deliberately absent
 
 - Nothing claims certification. The related Compliance surface (DevOps portal) is
-  explicit: *aligned with 12 published frameworks, certified against none — no
-  certificate held, no independent audit, no attestation.*
+  explicit: *aligned with 13 published frameworks, certified against none — no
+  certificate held, no independent audit, no attestation.* That page now leads with what
+  is **enforced** — 38 of its 124 controls — and puts the rest one click away, for the
+  same reason this page leads with the rows that moved least.
 
 ---
 
@@ -928,21 +962,32 @@ where the client may not change it — who may.
 **Text size.** 90 / 100 / 110 / 125 %, with the scope selector *Just me / Everyone in my
 tenant / Every tenant*.
 
-**Categories.** How the agent answers (6), Guardrails (7), Memory and retention (2), Seat
+**Categories.** How the agent answers (8), Guardrails (7), Memory and retention (2), Seat
 (6), Skills (1). Note what is **not** in a client's catalogue that is in the AI team's:
-*Ingestion jobs*.
+*Ingestion jobs* — the `jobs.*` keys are not readable by a client at all, and an
+unreadable key is **omitted** from the list rather than refused, so it cannot blank the
+screen. *(Counts read from `SETTING_SPECS`, not re-walked: two token ceilings joined the
+`agent.*` family.)*
 
-**How the agent answers** — six controls. Five of them read `Read only` for a client, with
-the sentence *"Only a platform admin, a tenant admin and the AI team may change this."*
+**How the agent answers** — eight controls. Six of them read `Read only` for a client,
+with the sentence *"Only a platform admin, a tenant admin and the AI team may change
+this."*
 
 | Control | In force | Decided by | Client may change |
 |---|---|---|---|
 | `agent.agentic_retrieval_max_rounds` | 2 | platform default | no · cannot be weakened |
 | `agent.gate_min_risk` | high | platform default | no · cannot be weakened |
-| `agent.max_plan_iterations` | 2 | platform default | no · cannot be weakened |
+| `agent.max_plan_iterations` | 4 | platform default | no · cannot be weakened |
+| `agent.max_trajectory_tokens` | 36,000 | platform default | no · cannot be weakened |
+| `agent.max_tool_result_tokens` | 4,000 | platform default | no · cannot be weakened |
 | `agent.mode` | standard | platform default | **Not wired up — "Nothing reads this yet."** |
 | `agent.model` | default | platform default | yes (a preference, not a permission) |
 | `agent.team.max_parallel` | 4 | platform default | no · cannot be weakened |
+
+The two token ceilings are readable by a client and writable only by the admin tiers and
+the AI team. They bound one lane's whole trajectory and one tool result's contribution to
+it — Aegis has no trajectory compaction, so they stand in for one — and both are
+`tighten_only`, which is the same direction rule `gate_min_risk` carries.
 
 `gate_min_risk` carries the sentence worth reading aloud:
 

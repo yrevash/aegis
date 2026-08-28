@@ -50,10 +50,10 @@ to attribute a pre-existing failure to your own edit and lose an hour.
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q)
 ```
 
-At the time of writing this is **132 passed** in well under a minute, with **no**
-database, no Neo4j, no Redis, and no API key. That is deliberate: the whole
-vertical slice runs on injected fakes, which is what makes this loop fast enough
-to run after every single step below.
+On 2026-08-28 this is **153 passed in about 90 seconds**, with **no** database, no
+Neo4j, no Redis, and no API key. That is deliberate: the whole vertical slice runs on
+injected fakes, which is what makes this loop cheap enough to run after every single
+step below.
 
 **Write down whatever number you actually get** — not the one in this sentence,
 which will have drifted. That is your regression baseline, and it should only ever
@@ -550,7 +550,9 @@ dependencies to `aegis/pyproject.toml` yourself — name them in the report.
 ## If you need more context
 
 - `backend/src/app/adapter/README.md` — the same ten pieces as a local map.
-- `docs/learn/50-run-and-extend.md` §7 — the `AgentDeps` hook table: which engine
-  hook calls which adapter function.
+- `docs/module/MODULE_REFERENCE.md` and
+  `docs/architecture/system-architecture.md` — the Module Contract, the streaming
+  spine, and which engine hook calls which adapter function. (These replace the
+  `docs/learn/` path this file used to name; that directory no longer exists.)
 - `aegis/PUBLIC.md` — what in the core is promised and what is not.
 - `AGENTS.md` — repo layout, commands and boundaries.

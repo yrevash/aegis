@@ -11,12 +11,15 @@ uncertainty-bounded, explainable, guarded, human-approved and fully traced.
 
 </div>
 
-![The Aegis console streaming an agent run](web/public/shots/console.png)
-
-> The console mid-run: live reasoning, the orchestration graph with per-node
-> timings and cost, retrieval provenance, and the human gate. Screenshots in this
-> README are captured on **offline demo data** — the console's own red banner in
-> each shot says so, and it is left uncropped on purpose.
+> **There are no screenshots in this README, on purpose.** Five were embedded here
+> until `7e218909` ("take ML out of the agent graph, and delete every invented
+> thing") deleted the image files, and they were pictures of a console that this
+> repository no longer builds. A stale screenshot is the one claim in a README
+> nobody can check by reading the code, so it is the last one that should be
+> allowed to rot. Run `./scripts/bootstrap.sh && ./scripts/dev-native.sh`, open
+> <http://localhost:3000>, and the console shows you the current thing: live
+> reasoning, the orchestration graph with per-node timings and cost, retrieval
+> provenance, and the human gate.
 
 ---
 
@@ -30,10 +33,11 @@ Aegis is built the other way around — the instrumentation is the product.
   per-tenant budgets enforced *before* spend, role→model routing, and a durable
   usage ledger.
 - **Measurable enough to trust.** Calibrated conformal intervals and SHAP drivers
-  on the ML signal; an offline evaluation gate and a CI regression gate on
-  retrieval quality; OpenTelemetry traces on every run.
+  on the ML signal; a deterministic offline eval gate and a CI regression gate on
+  retrieval quality, plus real `ragas` metrics on demand — metered through the same
+  gateway as everything else; OpenTelemetry traces on every run.
 - **Secure enough to buy.** Multi-tenant RBAC with Postgres row-level security,
-  six guardrail layers, and an append-only audit log.
+  six guardrail layers, and a hash-chained audit log anyone can re-verify.
 - **It takes real actions** — behind a risk-tiered human gate.
 
 **The core is a package you import, not an application you fork.** Point Aegis at
@@ -61,6 +65,11 @@ table, so an unseeded backend answers 503 and says exactly that. Logins:
 `admin` / `ai` / `devops` / `client` (platform staff) and `northwind.admin` /
 `vertex.admin` (the two seeded tenants), password `demo`.
 
+**Ask a corpus question as `northwind.admin`, not as `admin`.** The platform accounts
+carry no `tenant_id` and own no documents, so a retrieval run as one of them returns
+zero candidates — that is row-level security working, not a broken index. `INSTALL.md`
+spells it out, because it has cost real debugging time.
+
 Three run modes, so a demo never depends on infrastructure being healthy:
 
 | Mode | What runs | Needs |
@@ -74,12 +83,12 @@ On Windows, Redis is **Memurai** — same wire protocol, same port, no config ch
 
 ---
 
-## The twelve modules
+## The fifteen modules
 
 Every capability is a first-class **Aegis module**: a branded name paired with its
 **honest underlying tech**. Branding, never hiding. This table mirrors the live
 manifest in `backend/src/app/capabilities.py`, served publicly at
-`GET /platform/capabilities`.
+`GET /v1/platform/capabilities` — which counts itself, so the number above is checkable.
 
 | Module | Tech underneath | What it is |
 |---|---|---|
@@ -87,14 +96,17 @@ manifest in `backend/src/app/capabilities.py`, served publicly at
 | **Aegis Router** | LangGraph | Multi-agent supervisor — routes a turn to the right specialist |
 | **Aegis Memory** | Postgres + Qdrant | Episodic · semantic · procedural, bitemporal, consolidated |
 | **Aegis Cache** | Redis / Memurai | Semantic response cache |
-| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank |
+| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + keyword → RRF → local cross-encoder rerank |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Ensemble + calibrated conformal intervals + SHAP |
+| **Aegis Voice** | hosted Whisper via LiteLLM | Speech to text, chunked on silence, behind the full text rails |
+| **Aegis Forecast** | Nixtla `statsforecast` + conformal intervals | Time-series forecasts whose interval coverage is measured (optional) |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema, content |
 | **Aegis Evals** | Deterministic proxies offline, real `ragas` metrics live | Trace-level and answer evaluation |
 | **Aegis Loop** | native | LLM-Ops self-improvement: trace → eval → diagnose → tiered release |
-| **Aegis Governance** | Postgres RLS + JWT | Multi-tenant RBAC, budgets, RLS, audit log |
+| **Aegis Governance** | Postgres RLS + JWT | Multi-tenant RBAC, budgets, RLS, hash-chained audit log |
 | **Aegis Trace** | OpenTelemetry → Phoenix | End-to-end glass-box tracing |
-| **Aegis Tools / MCP** | native + MCP SDK | Risk-tiered tool registry + human gate, exposed over MCP |
+| **Aegis Vision** | hosted Llama-3.2-90B-Vision + Presidio image redactor | Image understanding with the injection screen ahead of the model |
+| **Aegis Tools / MCP** | native + MCP SDK | Risk-tiered tool registry + human gate, exposed over MCP (optional) |
 
 ---
 
@@ -103,7 +115,7 @@ manifest in `backend/src/app/capabilities.py`, served publicly at
 ```mermaid
 flowchart TB
     B["<b>Browser</b>"]
-    L1["<b>1 · Console</b> — web/<br/>Next.js 15 · React 19 · TypeScript<br/>four role portals · REST + SSE client"]
+    L1["<b>1 · Console</b> — web/<br/>Next.js 15 · React 19 · TypeScript<br/>five role portals · REST + SSE client"]
     L2["<b>2 · Composition root</b> — backend/src/app<br/>FastAPI · app factory · background sweepers<br/>routes.py — endpoints · JWT · RBAC · tenant scoping"]
     L3["<b>3 · Importable core</b> — aegis/src/aegis<br/>agent · gateway · guardrails · retrieval · memory · ml<br/>governance · ops · evals · observability · redteam · data · core"]
     L4["<b>4 · Stores and sinks</b><br/>Postgres · Qdrant · Neo4j · Redis · Arize Phoenix"]
@@ -118,17 +130,27 @@ flowchart TB
 
 ### The request path
 
-`POST /query` → `guard_input` → `route` → `recall_memory` → `retrieve` →
-`ml_predict` → `plan` → `gate` → *(approval interrupt)* → `act` → `reflect` →
-`generate` → `guard_output` → `persist_memory`
+`POST /v1/query` → `guard_input` → `route` → `recall_memory` → `retrieve` →
+`ml_predict` → `plan` → `gate` → *(approval interrupt)* → `act` → `verify` →
+`reflect` → *(back to `plan`, or on to)* → `generate` → `guard_output` →
+`persist_memory`
 
-Two rules the whole design hangs on:
+Three rules the whole design hangs on:
 
 1. **ML informs, it never gates.** The prediction and its conformal interval are
    evidence injected into the plan. The human gate fires on a **tool's risk
    tier** — never on model confidence.
 2. **A gated run checkpoints durably** and resumes on any worker from a persisted
    approvals-inbox row.
+3. **`act` does not report its own success.** `verify` sits between `act` and
+   `reflect` and decides against something outside the model, in three tiers,
+   cheapest first: **deterministic** (tool rows and rail verdicts), **read-back**
+   (one read-only call proving the write landed), then a single reasoning call
+   only where neither settled it. Where nothing in the deployment can confirm the
+   write, the verdict is `unverifiable` and says so rather than assuming. There is
+   no self-critique tier — asking a model to grade its own work is not
+   verification. The loop stops on the **third identical failing attempt**, because
+   the second is the retry this loop exists to perform.
 
 ---
 
@@ -139,11 +161,19 @@ Six checkpoints stand between the model and a real action:
 | # | Checkpoint | Mechanism |
 |---|---|---|
 | 01 | Input rails | injection classification · PII · schema · topical scope, fail-closed |
-| 02 | Retrieval | vector + graph + BM25 → RRF → rerank, every claim cited |
+| 02 | Retrieval | vector + graph + keyword → RRF → rerank, every claim cited |
 | 03 | Signal | conformal interval + SHAP drivers |
 | 04 | Human gate | by tool risk tier |
 | 05 | Governance | budget enforced before spend · row-level security |
-| 06 | Audit | OpenTelemetry trace + append-only audit row |
+| 06 | Audit | OpenTelemetry trace + hash-chained audit row, verifiable at `GET /v1/audit/verify` |
+
+Two bounds sit across all six, because an agent that cannot be stopped is not
+guarded: `agent.max_trajectory_tokens` (36000) caps one lane's whole trajectory and
+`agent.max_tool_result_tokens` (4000) caps a single tool result's contribution to it.
+Both are settings-catalogue keys a tenant may tighten and never loosen, and both are
+enforced on the main graph *and* on every sub-agent lane. A lane cut at its ceiling
+ends in `SubAgentStatus.CEILING` — a designed terminal state that keeps what it found
+and is reported as itself on the wire, not dressed up as `done`.
 
 ---
 
@@ -156,13 +186,13 @@ Six checkpoints stand between the model and a real action:
 > frameworks to **files, routes and tests in this repository** — the kind of thing a
 > buyer's security reviewer can open and check, not a badge.
 
-Twelve frameworks are mapped, India's law first because for a deployment in India the
+Thirteen frameworks are mapped, India's law first because for a deployment in India the
 DPDP Act is *law* and the rest is practice:
 
 | Jurisdiction | Frameworks |
 |---|---|
 | **India** | DPDP Act 2023 + Rules 2025 · CERT-In Directions · MeitY IAGG, RBI ITGRCA, SEBI CSCRF, BIS IS 17428 |
-| **International** | OWASP LLM Top 10 · OWASP Top 10 · MITRE ATLAS · NIST AI RMF · ISO/IEC 42001 · ISO/IEC 27001 · EU AI Act · SOC 2 TSC · GDPR |
+| **International** | OWASP LLM Top 10 · OWASP Agentic Top 10 · OWASP Top 10 · MITRE ATLAS · NIST AI RMF · ISO/IEC 42001 · ISO/IEC 27001 · EU AI Act · SOC 2 TSC · GDPR |
 
 Every control sits in one of **four** states — `enforced`, `partial`,
 `not_implemented`, `not_applicable` — and the last two are stated plainly rather than
@@ -176,8 +206,8 @@ them from the surfaces that count them on every request:
 | Where | What it gives | Who can read it |
 |---|---|---|
 | [`docs/compliance/README.md`](docs/compliance/README.md) | The written authority — every control, its state, its evidence and what is missing | anyone with the repo |
-| `GET /platform/standards` | Framework names, jurisdictions and the four derived counts | **public**, no token — this is what the landing page renders |
-| `GET /compliance` | The full control-by-control map with every file, route and test | platform staff only — a public gap map is a target list |
+| `GET /v1/platform/standards` | Framework names, jurisdictions and the four derived counts | **public**, no token — this is what the landing page renders |
+| `GET /v1/compliance` | The full control-by-control map with every file, route and test | platform staff only — a public gap map is a target list |
 
 `backend/tests/api/test_compliance.py` resolves **every** evidence reference against
 the real filesystem, the real served route table and the real pytest node ids on each
@@ -217,6 +247,15 @@ The proof for the first row is
 `backend/tests/agent/test_durable_approvals.py::test_fresh_worker_rehydrates_and_resumes_by_thread_id`
 — park the run, restart the worker, resume from the checkpoint.
 
+**One correction this README owes its own retrieval claim.** The third arm beside
+vector and graph is a keyword arm, and it is **PostgreSQL `ts_rank`, not Okapi BM25**.
+It has term frequency and length normalisation and it has **no IDF**, so a rare term
+and a common one weigh the same. That is a real difference in ranking behaviour, and it
+is bought deliberately: the tenant predicate and the full-text predicate sit on the same
+row of the same table, so tenant isolation is a `WHERE` clause rather than a second
+index to keep in sync. `aegis/src/aegis/retrieval/lightrag_backend.py` states it in the
+same words, and the console labels the arm "Keyword (ts_rank)".
+
 Both of these sections are rendered on the public landing page, and **both are
 removable by one constant** in `web/src/components/landing/bands.config.ts`, whose
 docstring says exactly what each switch takes off the page.
@@ -225,15 +264,70 @@ docstring says exactly what each switch takes off the page.
 
 ## The console
 
-Four role-scoped portals — `admin`, `ai_team`, `devops`, `client` — each a focused
-subset of surfaces. Every claim the platform makes has a screen behind it.
+Five role-scoped portals — `platform_admin`, `tenant_admin`, `ai_team`, `devops`,
+`client` — each a focused subset of surfaces, listed in
+`web/src/lib/portal.ts::ROLE_SECTIONS`. The two admin tiers are separate portals on
+purpose: administering one tenant and operating the platform are different jobs, and
+signing in is what decides which. Every claim the platform makes has a screen behind it.
 
-| | |
-|---|---|
-| ![Admin overview](web/public/shots/overview.png) | ![Knowledge graph](web/public/shots/graph.png) |
-| **Command centre** — spend, approvals, security posture, latency | **Knowledge graph** — the entities a run touched, from Neo4j |
-| ![Guardrails](web/public/shots/guardrails.png) | ![Memory](web/public/shots/memory.png) |
-| **Guardrails** — six layers, each with its own pass/block record | **Memory** — episodic, semantic and procedural recall |
+Four screens worth opening first, and where each one lives:
+
+| Screen | Where | What it shows |
+|---|---|---|
+| **Command centre** | `/app/platform_admin/dashboard` | Spend, approvals, security posture, latency |
+| **Knowledge graph** | `/app/ai_team/graph` | The entities a run touched, read from Neo4j |
+| **Guardrails** | `/app/ai_team/guardrails` | Six layers, each with its own pass/block record — and a live rail that fires real adversarial payloads at `GET /v1/stream/guardrail-demo` rather than replaying a stored verdict |
+| **Interop** | `/app/devops/interop` | The four published standards, probed live |
+
+Every screen is governed by two rules written out in `DESIGN.md` §4: **a listing opens
+closed** (hover reveals, click pins), and **a page explains itself without prose**. The
+forcing function is a ten-to-fifteen minute demo of the whole platform — a screen a
+reviewer cannot read in seconds has failed, however correct it is. What that never
+licenses is deleting evidence: a `Receipt`, an `Absence` and an active failure's
+remediation always stay. Quiet comes from relocating, never removing.
+
+---
+
+## Interoperability — four published standards, all four checkable
+
+The parts of Aegis that a buyer's own tooling can talk to without asking us for
+anything. Each is served, not described; the paths below are the whole claim.
+
+| Standard | Where | What it is |
+|---|---|---|
+| **A2A 1.0** | `GET /.well-known/agent-card.json` · `GET /.well-known/jwks.json` · `POST /v1/a2a` | Another agent discovers this one and sends it work. JSON-RPC, two methods in the 1.0 PascalCase spelling: `SendMessage` and `GetTask` |
+| **MCP** | `POST /mcp/mcp` (Streamable HTTP) | This agent's risk-tiered tools, exposed to any MCP client. Server name `aegis-adapter-tools` — it was `tcs-adapter-tools` |
+| **CycloneDX 1.6** | `GET /v1/platform/agbom` | The agent bill of materials — 25 components, served as `application/vnd.cyclonedx+json` |
+| **OpenTelemetry** | every run | GenAI semantic-convention spans, exported to Phoenix |
+
+The console renders all four on **Interop**, reachable from the `platform_admin`,
+`ai_team` and `devops` portals. The A2A block on that page is a **live probe, not a
+claim**: the protocol version, the interfaces and the skill list are read from the
+running deployment on mount, so a card that stops answering leaves the page saying
+nothing rather than continuing to advertise.
+
+Three things stated plainly, because each is the kind of thing a standards page is
+usually quiet about:
+
+- **The card's `capabilities` are all `false`.** `streaming`, `pushNotifications` and
+  `extendedAgentCard` each name a method this surface does not implement, and two of
+  them were `true` for a release. A peer routes its call on these flags, so an unearned
+  `true` is worse than a `false` — it sends a working client into a method that answers
+  `-32601`.
+- **The card is unsigned unless `a2a_public_origin` is configured.** The origin is read
+  from configuration and *never* from `request.base_url`: a `Host:` header once put an
+  attacker's URL inside a signature this platform's own key had certified. With no
+  configured identity the card is served honestly with relative URLs and no
+  `signatures` array, rather than signed over a guessed origin.
+- **A2A's `tenant` field never sets database scope.** It arrives before authentication
+  and is entirely caller-controlled; Aegis's tenancy is a Postgres GUC set from a
+  verified bearer token. When the two disagree the request is refused, and the refusal
+  is byte-identical whichever tenant was named — so the error cannot be used to
+  enumerate which tenants exist.
+
+The AgBOM is deterministic apart from its `metadata.timestamp`, and its `serialNumber`
+is derived from the content, so two builds of the same platform produce the same
+identifier and a changed component changes it.
 
 ---
 
@@ -269,25 +363,32 @@ fails if any document disagrees with it.
 ## Repository layout
 
 ```
-aegis/          # the importable core — 30 packages, 2268 tests
-backend/        # FastAPI composition root — 121 endpoints, 1174 tests
+aegis/          # the importable core — 29 subpackages, 2438 tests
+backend/        # FastAPI composition root — 122 documented routes, 2210 tests
   src/app/
     api/        # routes + Pydantic contracts + SSE event schema
+    a2a/        # the Agent2Agent surface — card, signing, JSON-RPC
     agent/      # LangGraph orchestration
     adapter/    # the domain seam
-    platform/   # role-portal read surfaces
+    platform/   # role-portal read surfaces, and the CycloneDX AgBOM
 web/            # Next.js console — landing page + five role portals
 docs/           # learn path, teaching course, ADRs, module reference, threat model
 scripts/        # bootstrap · preflight · start  (.sh and .ps1)
 ```
 
+The route count is `paths` in the committed `backend/openapi.json`; the three
+infrastructure probes (`/health`, `/ready`, `/readyz`) and the two A2A well-known paths
+are served outside the schema and are not in it.
+
 ## Verification
 
+Measured on this tree, 2026-08-28:
+
 ```bash
-cd aegis   && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q   # 2268 passed
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q # 1174 passed
-cd web     && npx tsc --noEmit && npx next lint --dir src && npm test   # 158 passed
-cd web     && npx next build                                           # 65/65 pages
+cd aegis   && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q   # 2424 passed, 14 skipped
+cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q # 2209 passed, 1 skipped
+cd web     && npx tsc --noEmit && npx next lint --dir src && npm test   # 406 passed
+cd web     && npx next build                                           # 70/70 pages
 ```
 
 ## Documentation
@@ -307,5 +408,6 @@ the whole platform, top to bottom, in one file. `docs/install/` is the setup pat
 | [`docs/security/`](docs/security/) | Threat model and OWASP Agentic Top-10 mapping |
 | [`docs/operations/runbook.md`](docs/operations/runbook.md) | One-page operations guide and fallback ladder |
 
-Live, self-describing surfaces: `GET /docs` (OpenAPI), `GET /platform/capabilities`
-(the module manifest as data, public), `GET /about`.
+Live, self-describing surfaces: `GET /docs` (OpenAPI, at the root — it is not a
+versioned product route), `GET /v1/platform/capabilities` (the module manifest as data,
+public) and `GET /v1/about`.

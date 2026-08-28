@@ -226,8 +226,14 @@ deploy-time knob.
 
 ## What it does not do
 
-- **It does not depend on `ragas` or `deepeval`.** Both patterns are implemented
-  natively so the gate runs in CI with no keys, no network and no heavy install.
+- **The offline gate does not import `ragas` or `deepeval`.** Both patterns are
+  implemented natively there, so the gate runs in CI with no keys, no network and
+  no heavy install. That is a statement about the gate, not about the module: the
+  live-scoring path in `libs/ragas_suite.py` does import the real `ragas`, lazily,
+  inside the function that needs it. The dependency is declared by the host
+  (`backend/pyproject.toml`, `ragas>=0.4.3,<0.5`); the `aegis` package itself
+  declares neither it nor an extra for it, which is why importing `aegis.evals` on
+  a box without `ragas` still costs nothing.
 - **It does not compute answer relevancy deterministically.** That needs a
   generation and a similarity model; relevance is only available through the
   optional judge.

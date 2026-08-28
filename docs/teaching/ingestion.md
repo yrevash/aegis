@@ -93,6 +93,23 @@ chunks per request, written to `chunks.embedding` in Postgres.
 live in Postgres, `python -m app.ingestion --reindex` replays them into a
 fresh collection with no embedding-provider call.
 
+**A re-index now prunes, and the order matters.** Publishing alone made a
+re-chunk *additive*: the previous chunking stayed in the collection, and on this
+deployment about **30 % of the points became orphans that were still being
+retrieved and cited**. `prune_stale_chunk_points` deletes every point in scope
+that the current chunking no longer produces, so a re-chunk converges instead of
+accumulating. Three properties are deliberate:
+
+- **Publish, then prune.** A crash between the two leaves a superset —
+  retrievable, with some duplicates — rather than a hole. The reverse order can
+  leave a document silently unretrievable.
+- **Pruned under the same scope the audit uses**, so a per-document rebuild can
+  never reach another document's points, and the helper refuses an empty
+  expected set rather than guessing.
+- **The dry run forwards the flag.** `--reindex` with a dry run reports what it
+  *would* delete. A destructive step whose preview always reads `0` is a preview
+  nobody can act on.
+
 **graph.** Extraction defaults to an **LLM** extractor (`GRAPH_EXTRACTOR=llm`);
 setting `GRAPH_EXTRACTOR=spacy` selects the deterministic spaCy NER plus
 sentence-co-occurrence extractor instead. If the model gateway cannot be
@@ -179,7 +196,7 @@ The command-line surface is `python -m app.ingestion` with `--reindex`,
 | `backend/src/app/ingestion/graph_projection.py` | the Neo4j write, including `source_id` |
 | `backend/src/app/ingestion/graph_vectors.py` | entity and relation vector publication |
 | `backend/src/app/ingestion/chunk_kv.py` | LightRAG's `lightrag_doc_chunks` key-value table |
-| `backend/src/app/ingestion/vector_index.py` | the narrow re-index path, replaying stored vectors |
+| `backend/src/app/ingestion/vector_index.py` | the narrow re-index path: replays stored vectors, then prunes the points the current chunking no longer produces |
 | `backend/src/app/ingestion/reindex.py` | the wide re-index path, re-running chunk through graph |
 | `backend/src/app/ingestion/graph_backfill.py` | `--backfill-graph`, rebuilt from `chunks.meta` |
 | `backend/src/app/ingestion/__main__.py` | the `--reindex` / `--verify` / `--backfill-graph` CLI |

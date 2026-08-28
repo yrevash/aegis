@@ -134,6 +134,30 @@ at or over the limit. The call is not made. `record_usage()` writes the
 prefix, model, trace id, outcome, free text, time range), always ANDed with the
 caller's sealed tenant scope.
 
+**The trail is hash-chained, per tenant.** Every row carries a `prev_hash`: the
+hash of its predecessor mixed into its own serialisation. A per-row hash proves
+only that a row was not *edited*; a chain also detects a row that was
+**removed**, which is the quieter attack. `verify_audit_chain(tenant_id)` walks
+one tenant's chain, re-derives every hash and reports the first break.
+
+Four details are load-bearing:
+
+- **A unique index on `(tenant_id, prev_hash)`** turns a fork into an insert-time
+  error rather than a silent branch months later. PostgreSQL treats NULLs as
+  distinct, so every pre-chain row (all `prev_hash IS NULL`) coexists freely.
+- **The chain is per tenant**, which is what makes `GET /v1/audit/verify`
+  answerable without handing anybody another tenant's rows.
+- **`ts` is written by the process, not the database**, because it is part of the
+  hashed serialisation and `func.now()` assigns a value only after the hash has
+  been computed. The cost is stated rather than discovered: on a multi-host
+  deployment two hosts' audit timestamps can disagree by their clock skew. The
+  chain does not care — its order is `prev_hash` — but the read path's
+  `ORDER BY ts DESC` does.
+- **`unchained` is reported separately and never folded into `intact`.** Rows
+  written before the chain existed carry no hash, and nothing can be proved about
+  history nobody hashed. A green tick covering them would be exactly the
+  overclaim the endpoint exists to retire.
+
 ## What it stores
 
 Five tables on the shared `AegisBase` metadata.
@@ -144,7 +168,7 @@ Five tables on the shared `AegisBase` metadata.
 | `users` | `id`, `username` (unique), `role` (`admin` / `ai_team` / `devops` / `client`), `tenant_id` (FK; NULL means platform-wide), `email`, `is_active`, `password_hash` (Argon2id — withheld from the database console by a column grant). |
 | `budgets` | `scope_type` (`tenant` or `user`) + `scope_id`, `tenant_id`, `window` (`day` / `month`), and the four caps `token_cap`, `usd_cap`, `rpm`, `tpm`. Any cap may be NULL, meaning uncapped. |
 | `usage_ledger` | One row per model call. `tenant_id`, `user_id`, `ts`, `model`, `prompt_tokens`, `completion_tokens`, `cost_usd`; `audio_seconds` and `images` so a transcription or vision call is a real row rather than `$0.00`; `run_id` (indexed, no foreign key — NULL means "not attributable to a run", never zero); `trace_id`. |
-| `audit_log` | `tenant_id` + `ts` (with a `(tenant_id, ts DESC)` index), `action`, `actor`, `approved_by`, `model`, `trace_id`, and a `jsonb` `payload`. |
+| `audit_log` | `tenant_id` + `ts` (with a `(tenant_id, ts DESC)` index), `action`, `actor`, `approved_by`, `model`, `trace_id`, a `jsonb` `payload`, and the chain columns `row_hash` / `prev_hash` with a unique `(tenant_id, prev_hash)` index. |
 
 ## Security and tenant isolation
 
@@ -180,6 +204,7 @@ All product routes are served under `/v1`.
 | POST | `/v1/admin/budgets` | `tenant_admin` and above | The upserted budget; refuses a user cap above its tenant's. |
 | GET | `/v1/admin/usage` | `tenant_admin` and above | The usage rollup. |
 | GET | `/v1/audit` | admin or devops | Audit rows, newest first, server-side filtered. |
+| GET | `/v1/audit/verify` | admin or devops, with `seat.can_view_tenant_audit` | The chain walk: `intact`, `checked`, `unchained`, `broken_at`, `detail`, `head`. Scoped exactly like `GET /v1/audit`. |
 | GET | `/v1/governance/dashboard` | `tenant_admin` and above | Tenants, per-cap budget/spend/remaining, users, usage rollup and the recent audit tail. |
 
 ## Configuration
@@ -207,7 +232,8 @@ Read from the backend's environment (`backend/src/app/config.py`).
 | `aegis/src/aegis/governance/security.py` | Argon2id hashing, JWT issue/decode, `SecurityConfig`, role derivation. |
 | `aegis/src/aegis/governance/config.py` | `RBAC_LADDER`, `role_rank()`, `effective_config()`. |
 | `aegis/src/aegis/governance/enforcement.py` | Budget resolution, `enforce_governance`, `record_usage`, tenant/user/budget admin. |
-| `aegis/src/aegis/governance/audit.py` | `record_audit`, `list_recent_audit`, outcome classification. |
+| `aegis/src/aegis/governance/audit.py` | `record_audit`, `list_recent_audit`, `verify_audit_chain`, `ChainVerification`, outcome classification. |
+| `aegis/src/aegis/governance/chain.py` | The per-row hash and the chain link the audit writer and the verifier share. |
 | `aegis/src/aegis/governance/context.py` | The `GovernanceContext` contextvar read at the gateway chokepoint. |
 | `aegis/src/aegis/governance/schema.py` | `reconcile_additive_columns` — installs additive column drift at bootstrap. |
 | `aegis/src/aegis/governance/dashboard.py` | The read model behind `GET /v1/governance/dashboard`. |
@@ -221,7 +247,11 @@ Read from the backend's environment (`backend/src/app/config.py`).
   there.
 - **The append-only revoke is not tamper-proofing.** The owner role keeps full
   DML, so anyone holding `POSTGRES_ADMIN_DSN` can rewrite the trail. It makes
-  tampering require that connection.
+  tampering require that connection — and the hash chain is what makes such a
+  rewrite *detectable* afterwards. Detection, not prevention: nothing stops the
+  owner re-deriving the whole chain from an edited row onward.
+- **The chain cannot vouch for rows that predate it.** They carry no hash and
+  are counted as `unchained` rather than verified.
 - **No SIEM export, and no audit retention or archival policy.** The trail grows.
 - **The fail-open predicate is the default.** The stricter posture is opt-in via
   `RLS_FAIL_CLOSED=true`.

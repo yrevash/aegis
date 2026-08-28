@@ -4,8 +4,9 @@
 
 The orchestration engine. It takes one question and walks it through a fixed
 sequence of steps — input guardrail, intent routing, retrieval, planning, a
-risk gate, action, reflection, answer generation, output guardrail — and can
-fan out into a team of parallel specialist agents when the question needs it.
+risk gate, action, **verification**, reflection, answer generation, output
+guardrail — and can fan out into a team of parallel specialist agents when the
+question needs it.
 
 The sequence is a **LangGraph**: a way of writing an agent's control flow as
 named nodes joined by edges, instead of one long function. Each node can be
@@ -34,7 +35,8 @@ flowchart TD
     GT -->|risky tool| AP[approval interrupt]
     GT -->|safe| AC[act]
     AP -->|resumed| AC
-    AC --> RF[reflect]
+    AC --> VF[verify]
+    VF --> RF[reflect]
     RF -->|retry| PL
     RF -->|done| GN[generate]
     PT --> RN[run_team]
@@ -66,16 +68,56 @@ flowchart TD
    `interrupt()`. The run's state is written to a **checkpointer** — a store
    that saves a snapshot of graph state after each step — and execution
    actually stops.
-8. **`act`** executes the approved or safe actions.
-9. **`reflect`** judges the executed `ToolOutcome` results. It loops back to
-   `plan` while the goal is unmet and `max_plan_iterations` still allows it;
-   otherwise it goes to `generate`. The counter increments in `plan`, so the
-   loop always terminates.
-10. **Team path.** `plan_team` decomposes the question, `run_team` runs the
+8. **`act`** executes the approved or safe actions. It no longer reports its
+   own success — that judgement belongs to the next node.
+9. **`verify`** decides the round against something outside the model. The
+   design stance is *no self-critique*: asking a model whether its own work
+   was good is the failure mode that does not reliably help. Three tiers run
+   cheapest-first and stop at the first that reaches a verdict:
+
+   | Tier | What it costs | What it can decide |
+   | --- | --- | --- |
+   | deterministic | nothing — reads the rows already in hand | a tool failure, a rail refusal, a read-only round, an oscillation |
+   | read-back | one read-only call, below the gate | that the write actually landed |
+   | judge | one reasoning call | only what the first two left inconclusive |
+
+   Two of its verdicts are load-bearing. A **read-only** round is progress but
+   is not charged to the repair budget, so a successful lookup no longer stops
+   the read-then-write pair before the write. And **`OSCILLATING`** fires when
+   the same call has now failed *three* identical times — not two, because the
+   retry that repairs a transient failure necessarily carries the same
+   fingerprint as the attempt it repairs.
+10. **`reflect`** reads the verification verdict. It loops back to `plan`
+    while the goal is unmet and `max_plan_iterations` (default `4`) still
+    allows it; otherwise it goes to `generate`. The counter increments in
+    `plan`, so the loop always terminates.
+11. **Team path.** `plan_team` decomposes the question, `run_team` runs the
     specialists concurrently over a shared retrieval pool, `synthesize`
     merges their findings.
-11. **`generate`** writes the answer, **`guard_output`** screens it, and
+12. **`generate`** writes the answer, **`guard_output`** screens it, and
     **`stream`** sends it to the caller as server-sent events.
+
+**Two token ceilings bound a trajectory, and both are enforced.** Aegis has no
+trajectory compaction, so the ceilings stand in for it:
+
+| Ceiling | Default | What it bounds |
+| --- | --- | --- |
+| `max_trajectory_tokens` | 36 000 | one lane's whole trajectory, before its next model call |
+| `max_tool_result_tokens` | 4 000 | one tool result's contribution to that trajectory |
+
+The second is the one that bites first — the real exposure is a single
+unbounded result, not a long conversation. Both are enforced on the main graph
+**and** on every sub-agent lane, and both are tenant-tightenable through the
+settings catalogue (`agent.max_trajectory_tokens`, `agent.max_tool_result_tokens`,
+both `TIGHTEN_ONLY`).
+
+**`SubAgentStatus.CEILING` is a designed terminal state, not an error.** A lane
+that reaches its trajectory ceiling has, by construction, already done a lot of
+work. It emits `status="ceiling"` on the wire so the console can render it
+differently from a clean `done`, it **keeps** its findings, and the synthesis
+names it as cut short. Partial findings from a truncated lane are worth
+strictly more than silence, and the reader is told about the truncation in
+words rather than being told nothing twice over.
 
 **The checkpointer is injected.** `AGENT_CHECKPOINTER=memory` uses LangGraph's
 `InMemorySaver`; a parked run dies with the process. `AGENT_CHECKPOINTER=postgres`
@@ -147,12 +189,12 @@ table belongs to the runs module.
 
 | Path | What it does |
 | --- | --- |
-| `aegis/src/aegis/agent/graph.py` | the LangGraph itself, every node body, `NODE_LABELS`, `SPECIALIST_NODES` |
+| `aegis/src/aegis/agent/graph.py` | the LangGraph itself, every node body (including `verify` and its three tiers), `NODE_LABELS`, `SPECIALIST_NODES` |
 | `aegis/src/aegis/agent/router.py` | intent classification and the depth policy |
 | `aegis/src/aegis/agent/state.py` | `AgentState`, the typed graph state |
 | `aegis/src/aegis/agent/deps.py` | the dependency-injection contract and risk ordering |
 | `aegis/src/aegis/agent/team.py` | team planning, concurrent execution, synthesis |
-| `aegis/src/aegis/agent/subagent.py` | one specialist worker with its own working memory |
+| `aegis/src/aegis/agent/subagent.py` | one specialist worker with its own working memory; `SubAgentStatus` and the ceiling terminal state |
 | `aegis/src/aegis/agent/topology.py` | `graph_topology()`, read off the compiled graph |
 | `aegis/src/aegis/agent/approvals.py` | the approval registries and parked-run handles |
 | `aegis/src/aegis/agent/orchestrator.py` | the host-agnostic run loop and gate rendezvous |
@@ -172,6 +214,12 @@ table belongs to the runs module.
 - It does not expose the state a checkpoint captured; the projection is
   structural only.
 - It does not refuse an over-wide team request; it clamps and reports.
+- **It does not compact a trajectory.** There is no summarise-and-continue
+  step; the two token ceilings are what stand in for one, and a lane that
+  reaches `max_trajectory_tokens` stops rather than shrinking its history.
+- **`verify` never asks the model to grade itself.** The judge tier grades what
+  a tool returned, and only where the deterministic and read-back tiers were
+  inconclusive.
 - `team` is not a roster role a domain adapter can declare. The router writes
   it, so it cannot be configured away.
 - It does not run a machine-learning step. Predictions are a separate

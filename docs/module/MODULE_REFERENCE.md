@@ -30,6 +30,16 @@ works bolted onto Aegis's own backend.
 the sessions and the HTTP surface, and contributes no capability of its own that a
 module could have owned.
 
+Three machine-facing surfaces live in that composition root rather than in an `aegis.*`
+package, because each is a property of *this deployment* rather than of a reusable
+capability: the **A2A** endpoints (`app/a2a/` — protocol 1.0,
+`/.well-known/agent-card.json`, `/.well-known/jwks.json`, `POST /v1/a2a` with
+`SendMessage`/`GetTask`, and a routing `tenant` field that can never reach the database
+scope), the **MCP** server (`app/mcp/server.py`, named `aegis-adapter-tools`, which
+re-reads the caller's authority from the `users` table on every call), and the
+**AgBOM** (`app/platform/agbom.py`, CycloneDX 1.6 over the tool registry, model fleet,
+rail stages and knowledge collections, with a content-derived `serialNumber`).
+
 ## The Module Contract — three pillars
 
 **Pillar A — Importable & isolated.** One repo, one `aegis` package, one
@@ -115,7 +125,7 @@ graph TD
     end
 
     subgraph leaves["Leaf modules — depend on the foundations"]
-        guardrails["aegis.guardrails<br/>input/output rails (text + media)"]
+        guardrails["aegis.guardrails<br/>four rail stages — input, output,<br/>tool_result, memory_write (text + media)"]
         ml["aegis.ml<br/>predict + SHAP + conformal"]
         forecast["aegis.forecast<br/>time series + measured intervals"]
         retrieval["aegis.retrieval<br/>hybrid RAG"]
@@ -132,7 +142,7 @@ graph TD
     end
 
     subgraph orchestration["Orchestration — composes every module above"]
-        agent["aegis.agent<br/>LangGraph plan→gate→act→reflect —<br/>AgentDeps injection seam"]
+        agent["aegis.agent<br/>LangGraph plan→gate→act→verify→reflect —<br/>AgentDeps injection seam"]
     end
 
     core --> leaves
@@ -159,7 +169,7 @@ graph TD
     evals -->|eval_result| stream
     vision -->|vision events| stream
     voice -->|voice events| stream
-    agent -->|reasoning, routing, tool_call, approval_required,<br/>reflection … via the legacy StreamEvent seam| legacyStream["Legacy StreamEvent union<br/>(app.api.schemas, locked SSE contract)"]
+    agent -->|reasoning, routing, tool_call, approval_required,<br/>verification, reflection … via the legacy StreamEvent seam| legacyStream["Legacy StreamEvent union<br/>(app.api.schemas, locked SSE contract)"]
 
     legacyStream -.->|AG-UI migration deferred| stream
     stream --> frontendDecode["web/src/lib<br/>streamNames.ts + api/sse.ts"]
@@ -179,7 +189,7 @@ one file per module, in depth.
 | `aegis.core` | The contract: Protocols, shared types, registry, config, health, `AegisEmitter` | none (bare `aegis`) | [`core`](../teaching/core.md) |
 | `aegis.data` | Portable SQLAlchemy base + cross-dialect JSON/vector/UTC column types | `data` | [`data`](../teaching/data.md) |
 | `aegis.pipelines` | The stage declaration the three pipelines are read from, checked against the code | none | [`pipelines`](../teaching/pipelines.md) |
-| `aegis.governance` | Tenants, RBAC, Postgres RLS, budgets, audit | `governance` | [`governance`](../teaching/governance.md) |
+| `aegis.governance` | Tenants, RBAC, Postgres RLS, budgets, and a **hash-chained** audit trail (`chain.py`: `prev_hash`/`row_hash` per row, `verify_audit_chain` walking it, rows predating the chain reported separately rather than counted as verified) | `governance` | [`governance`](../teaching/governance.md) |
 | `aegis.guardrails` | Input/output rails: schema, PII, injection, topic, content safety, grounding | none for the base pipeline; `nemo` (Colang), `pii` (Presidio), `media`, `redis` optional | [`guardrails`](../teaching/guardrails.md) |
 | `aegis.security` | The security-posture surface: threats mapped to their *wired* controls | none | [`security`](../teaching/security.md) |
 | `aegis.redteam` | A harness that attacks the rails and reports what got through | none | [`redteam`](../teaching/redteam.md) |
@@ -190,13 +200,13 @@ one file per module, in depth.
 | `aegis.memory` | Working, episodic and semantic memory; recall and consolidation | `data` (no dedicated `memory` extra) | [`memory`](../teaching/memory.md) |
 | `aegis.skills` | `SKILL.md` documents an agent can reach for, scoped and versioned | `data` | [`skills`](../teaching/skills.md) |
 | `aegis.ingestion` | Parse → chunk → enrich → embed → index → graph, with the quality gate | `ingestion` | [`ingestion`](../teaching/ingestion.md) |
-| `aegis.retrieval` | Hybrid vector + graph + BM25 recall, RRF fusion, local cross-encoder rerank, spotlight | `retrieval` | [`retrieval`](../teaching/retrieval.md) |
+| `aegis.retrieval` | Hybrid vector + graph + keyword recall, RRF fusion (k=60), local ONNX cross-encoder rerank, spotlight. **The keyword arm is PostgreSQL `ts_rank`, not Okapi BM25** — see the note below the table | `retrieval` | [`retrieval`](../teaching/retrieval.md) |
 | `aegis.gateway` | The LiteLLM chokepoint: routing, cost, budget, fallback, the limiter | `gateway` | [`gateway`](../teaching/gateway.md) |
 | `aegis.jobs` | Durable work on Temporal, and what survives a crash | `data` | [`jobs`](../teaching/jobs.md) |
 | `aegis.runs` | The run record, folded from its own append-only event log | `data` | [`runs`](../teaching/runs.md) |
 | `aegis.ml` | Prediction + SHAP explanation + conformal intervals | `ml` | [`ml`](../teaching/ml.md) |
 | `aegis.forecast` | Time-series forecasting with measured, calibrated intervals | `forecast` | [`forecast`](../teaching/forecast.md) |
-| `aegis.evals` | Metrics, IR metrics, gold sets, ablation and an LLM-judge harness | none — bare `pip install aegis` | [`evals`](../teaching/evals.md) |
+| `aegis.evals` | Two different things, kept apart on purpose: deterministic lexical proxies + IR metrics + gold sets + ablation + an LLM-judge harness for the **offline gate**, and `evals/libs/` which runs the **real `ragas` library** for live scoring, every judge call routed through the Aegis gateway so it is budget-checked, traced and written to `usage_ledger` | none for the base package — `pip install aegis`; the real library is the backend's `evals-libs` extra (`ragas>=0.4.3,<0.5`), lazily imported so `aegis.evals` never pulls it | [`evals`](../teaching/evals.md) |
 | `aegis.analytics` | The `analytics_*` views, their RLS, and the Superset integration | `data` | [`analytics`](../teaching/analytics.md) |
 | `aegis.ops` | Diagnose, eval-gated release, promotion | `data` | [`ops`](../teaching/ops.md) |
 | `aegis.observability` | OTel / OpenInference span export | `observability` (+ `phoenix`) | [`observability`](../teaching/observability.md) |
@@ -209,6 +219,19 @@ one file per module, in depth.
 Two module-level files sit beside the packages: `aegis/runtime.py` (the `Aegis` runtime
 object, `AEGIS_MODE`) and `aegis/adapter.py` (the `DomainAdapter` protocol — the seam a
 new domain is written against).
+
+> **The keyword arm says `bm25` on the wire and is not BM25.** `RetrievalOrigin.BM25`
+> has the string value `"bm25"`, and the implementation behind it is PostgreSQL
+> `ts_rank` over a generated `to_tsvector('english', content)` column
+> (`aegis/src/aegis/retrieval/lightrag_backend.py`, `_KEYWORD_SQL`). `ts_rank` scores
+> term frequency and proximity with a length normalisation, and is **missing IDF** —
+> the third and most important of Okapi BM25's terms — so a common word and a rare one
+> weigh the same. The enum value is deliberately not renamed: it is on the wire in three
+> packages, in the generated OpenAPI schema, and in stored provenance rows, and renaming
+> it would break replay of runs already recorded. What is fixed instead is the *label* a
+> human reads: the console renders it as **"Keyword (ts_rank)"**
+> (`web/src/components/retrieval/observability.ts`). Anywhere this document or its
+> neighbours say "BM25", read "the keyword arm, which is `ts_rank`".
 
 `reasoning` and `routing` are reserved in `aegis.core.stream_names` for `aegis.agent`'s
 live-thinking and router-decision output. Both fire, but through `aegis.agent`'s own

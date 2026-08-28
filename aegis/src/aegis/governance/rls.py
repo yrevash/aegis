@@ -1072,7 +1072,8 @@ class RlsEnforcement:
 async def audit_rls_enforcement(engine: AsyncEngine) -> RlsEnforcement:
     """Ask the database whether the *serving* role is exempt from row security.
 
-    This is the check that the thirteen policies :func:`bootstrap_rls` installs are
+    This is the check that the policies :func:`bootstrap_rls` installs — one per
+    entry in :data:`_TENANT_SCOPED_TABLES`, twenty-five at the time of writing — are
     enforced against somebody. It must be run on the engine that serves **requests**,
     never on the owner/DDL engine — the owner is expected to bypass (that is the point
     of the split), so auditing it would report a healthy answer about the wrong

@@ -8,6 +8,12 @@
 > **Verified against the running system on 2026-08-23.** Figures quoted below are
 > from that moment and are **illustrative** — they will differ on the day. The
 > *sources* (endpoint, table, role) will not.
+>
+> **Refreshed against the code on 2026-08-28** for the changes that landed since:
+> the audit trail's hash chain and its verify button, the per-tenant record store,
+> and the compliance totals. Sections marked *"read from the code, not re-walked"*
+> were checked against the component and the endpoint rather than by looking at a
+> running box.
 
 ---
 
@@ -55,6 +61,24 @@ The rail groups the thirteen sections under two headings.
 The rule behind all four is written down in `portal.ts`: *a section belongs on a
 portal only if that role can act on it. A read-only copy of someone else's screen
 is a gap wearing a menu entry.*
+
+### Listings open closed — know this before you click
+
+*(DESIGN.md §4; read from the code, not re-walked.)* Every panel whose body is a
+list of rows — documents, approvals, audit entries, jobs, prompts, seats — opens as
+**one bar** carrying its title, its row count and one key figure:
+
+    Documents                                    10 rows · 7 ingested
+
+**Hover expands it; click pins it open**, and the pin survives the pointer leaving.
+One surface per page stays open — the thing the page is named after. The forcing
+function is the demo itself: a reviewer gets a few seconds to decide what a screen
+is, and spending them scrolling past forty rows is a failed screen however correct
+the table was.
+
+If a juror asks: the rows are collapsed, **never `display:none`** — they stay in
+the accessibility tree and reachable by keyboard, and each trigger is a real
+`<button>` carrying `aria-expanded`.
 
 ---
 
@@ -376,13 +400,21 @@ The human gate is a real `langgraph.types.interrupt`. With
 
 **"Are the per-node costs real?"**
 Yes — each node emits a `node_finished` event with its model, tokens, duration and
-USD. A local node (guardrails, routing, gate, reflect) shows `—` rather than
-`$0.00`, because it never called a model.
+USD. A local node (guardrails, routing, gate, verify, reflect) shows `—` rather
+than `$0.00`, because it never called a model.
 
 **"Show me one that went wrong."**
 Better material than a clean run. The event log shows tool errors verbatim, the
-reflect node re-planning, and the iteration budget being exhausted at round 2/2
-with *"finalising with the best available result"*. Nothing is smoothed over.
+verify node's verdict on the round, the reflect node re-planning, and the iteration
+budget being exhausted with *"finalising with the best available result"*. Nothing
+is smoothed over.
+
+**"What is the `verify` node?"**
+The node that decides whether the round worked, sitting between `act` and
+`reflect`. It judges against something outside the model — the rows already in
+hand, or a read-only read-back proving the write landed — rather than trusting a
+tool's own report that it succeeded. *(Read from `aegis/agent/graph.py`, not
+re-walked.)*
 
 ### Anything deliberately absent
 
@@ -767,6 +799,15 @@ own audit trail is theirs to read even where a write belongs elsewhere.
 
 ### What is on it
 
+**The chain strip** *(read from `admin/AuditLog.tsx`, not re-walked — it was added
+after the 2026-08-23 walk)*. One card above the insights with a **Verify the chain**
+button, and, before you press it, one line explaining itself: *"Every row is hashed
+with its predecessor's hash mixed in, so an edited row breaks itself and a removed
+one breaks everything after it."* Pressing it walks `GET /v1/audit/verify` and
+returns a badge — **`chain intact`** or **`broken at #<id>`** — the count of rows
+verified, and, separately, how many rows predate the chain and are therefore not
+covered by it. The second figure is never folded into the verdict.
+
 **The insight layer** — charts lead, the trail sits beneath as the thing they are
 derived from.
 
@@ -801,6 +842,15 @@ REVOKE UPDATE, DELETE ON public.audit_log FROM aegis_app;
 -- same for run_events (and every month partition) and usage_ledger
 ```
 
+Then press **Verify the chain**, because the grant is only half the argument:
+
+> "That stops the *application* rewriting this. It does not stop whoever holds the
+> owner connection. So every row also carries its predecessor's hash mixed into its
+> own, and this button asks the server to re-derive all of them. A per-row hash
+> would only prove no row was edited; the chain is what catches a row **removed**,
+> which is the quieter attack. And it reports honestly how many rows predate the
+> chain and are not covered by it at all."
+
 Then click the **Refused** lens:
 
 > "Every filter runs on the server. Changing one re-runs the query rather than
@@ -813,6 +863,13 @@ Then click the **Refused** lens:
 **"Where does the blocked/completed verdict come from?"**
 There is **no verdict column on the trail**. It is classified server-side by
 `aegis.governance.audit.classify_outcome`, and the lens tip says so.
+
+**"Could someone re-derive the chain after editing a row?"**
+With the owner connection, yes. This is tamper *evidence*, not tamper prevention,
+and saying so is the honest answer. What it costs an attacker is that one quiet
+`UPDATE` or `DELETE` no longer suffices — they must rewrite every row after it, and
+a unique index on `(tenant_id, prev_hash)` means a spliced fork fails at insert
+time rather than being found months later.
 
 **"Will the CSV match what I see?"**
 Not always, and the screen tells you when it will not: the export takes the actor,
@@ -925,11 +982,14 @@ and can never weaken it.
 
 1. **Text size** — the one control that changes nothing on the server and
    everything about whether the rest of the screen is readable.
-2. **Settings catalogue** — a rail of namespaces and a panel. Verified live: **25
-   controls** across `guardrails` (7), `agent` (6), `seat` (6), `jobs` (3),
-   `memory` (2), `skills` (1). The rail says how many controls each namespace
-   holds and how many are inert or read-only, so what is *not* on screen is still
-   counted.
+2. **Settings catalogue** — a rail of namespaces and a panel. **27 controls**
+   across `agent` (8), `guardrails` (7), `seat` (6), `jobs` (3), `memory` (2),
+   `skills` (1). The rail says how many controls each namespace holds and how many
+   are inert or read-only, so what is *not* on screen is still counted. *(Counts
+   read from `SETTING_SPECS`, not re-walked — `agent` grew by two when the
+   trajectory token ceilings landed: `agent.max_trajectory_tokens` at 36,000 and
+   `agent.max_tool_result_tokens` at 4,000. Both are `tighten_only`, so you may
+   shrink either for your tenant and never widen one.)*
 3. **Skills** — write one, switch it on, and see which layer decided it. Resolved
    `platform ∪ tenant ∪ user`.
 4. **Tool roster** — "6 of 9", and why the other three. A read-only projection of
@@ -1012,16 +1072,40 @@ Run it in this order, with two browser windows:
 | Governance as either | The scope badge names the tenant; the roster is that tenant's people only |
 | Memory as either | `GET /memory/subjects` returns only that tenant's subjects, server-built |
 | Ask a question as one, watch the other's Overview | The other tenant's figures do not move |
+| Ask *"which requests are open?"* as each | Two different sets of request ids — the demo desk is per tenant, not one shared |
 
-Underneath: Postgres row-level security with `FORCE` on nineteen relations, and a
-serving role (`aegis_app`) that is `NOSUPERUSER NOBYPASSRLS`. `/readyz` reports it
-as a health component with its own evidence line.
+Underneath: Postgres row-level security with `FORCE` on **twenty-five** relations,
+and a serving role (`aegis_app`) that is `NOSUPERUSER NOBYPASSRLS`. `/readyz`
+reports it as a health component with its own evidence line.
 
-### 2 · The audit trail is append-only by privilege
+**The last row of that table is the newest, and it was a real hole.** The
+adapter's synthetic record store — the desk the demo tools act on — used to be one
+process-wide global. Measured: `northwind.admin` and `vertex.admin` each asked for
+open requests and both received the **identical** 25 ids out of the identical "40
+matching requests" set, and two independent auditors reached it from two different
+surfaces (A2A and MCP). Nothing real leaked, because those records are synthetic —
+but *"the isolation holds except in the data we demonstrate it with"* is not a
+sentence that survives a jury trying two logins side by side. The store is now
+keyed by tenant. The invariant that mattered is preserved and narrowed: there is
+still exactly **one** store per tenant, so a note added over MCP is still visible
+to the agent looking at that same request.
+
+### 2 · The audit trail is append-only by privilege, and checkable by hash
 
 `UPDATE` and `DELETE` are revoked from the serving role on `audit_log`,
 `run_events` (and every month partition) and `usage_ledger`. Postgres refuses, not
 the application. Demonstrable in psql in ten seconds.
+
+The grant is only half of it, because it does not bind whoever holds the owner
+connection. So every `audit_log` row also carries its predecessor's hash mixed
+into its own, and the **Verify the chain** button on the Audit screen walks
+`GET /v1/audit/verify`: the server re-derives every hash and reports `chain intact`
+or the first break. A per-row hash would only prove no row was *edited*; the chain
+is what catches a row **removed**, because everything after it stops verifying.
+Chains are per tenant, which is what makes the answer reachable without handing
+anybody another tenant's rows — and rows written before the chain existed are
+reported separately as `predate the chain, not covered`, never folded into the
+verdict.
 
 ### 3 · The human gate survives a restart
 

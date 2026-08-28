@@ -1,6 +1,6 @@
 # backend.md — Backend Context (historical)
 
-> ## Read this first — status, 2026-08-23
+> ## Read this first — status, 2026-08-28
 >
 > **This is the original backend design brief, written in early August, and it is kept
 > for one reason: source code cites it.** `aegis/retrieval/reranker.py` points here for
@@ -8,11 +8,19 @@
 >
 > **The current description of the system is
 > [`system-architecture.md`](system-architecture.md).** Where the two disagree, that one
-> wins. Two things below were true when written and are not now, and are corrected in
-> place: the vector store (Chroma / NanoVectorDB → **Qdrant**, ADR 0009 superseded by
-> phase 9 §9.1), and the module paths (capabilities moved out of `backend/src/app/*`
-> into the importable `aegis.*` packages). Everything framed as a plan — "the critical
-> spike", the quality bar, the agent directives — describes work that has since shipped.
+> wins. What was true when written and is not now is **corrected in place**, marked
+> *(Corrected: …)* or *resolved*, rather than deleted — the delta is the useful part:
+>
+> - the vector store (Chroma / NanoVectorDB → **Qdrant**, ADR 0009 superseded by phase 9 §9.1);
+> - the module paths (capabilities moved out of `backend/src/app/*` into the importable `aegis.*` packages, which the `app.*` names now shim);
+> - the **module table** (§0), which listed twelve capabilities against a manifest that publishes fifteen;
+> - the **agent loop** (§3), which is now plan → gate → act → **verify** → reflect;
+> - the **keyword retrieval arm** (§4), which is PostgreSQL `ts_rank` and was never Okapi BM25 however the wire value is spelled;
+> - the **reranker** (§1, §8), which is a local ONNX cross-encoder and was described here as an LLM rerank;
+> - the **span list** (§8), which named an `ml_predict` node the graph does not have.
+>
+> Everything else framed as a plan — "the critical spike", the quality bar, the agent
+> directives — describes work that has since shipped.
 >
 > The backend is the composition root of **Aegis**: agent orchestration, retrieval, the
 > ML spine, guardrails, and observability. Clean, typed, modular, and fully local-or-API
@@ -23,29 +31,40 @@
 ## 0. Aegis modules (the product identity)
 
 Every backend capability is a first-class **Aegis module** — a branded name presented
-**with its honest underlying tech** (branding, never hiding). The list below mirrors the
-live, typed manifest in `backend/src/app/capabilities.py`, served at
-`GET /v1/platform/capabilities` (and the identity card `GET /v1/about`). This is the single
-source of truth also used by the README and the frontend Platform view.
+**with its honest underlying tech** (branding, never hiding). The table below is
+transcribed from the live, typed manifest `AEGIS_MODULES` in
+`backend/src/app/capabilities.py`, served at `GET /v1/platform/capabilities` (and the
+identity card `GET /v1/about`). That manifest is the single source of truth, also used by
+the README and the frontend Platform view — and it has **fifteen** entries, not the
+twelve this table carried when Voice, Forecast and Vision were still to come.
 
-| Aegis module | Tech underneath | Real code path | Status |
+| Aegis module | Tech underneath | `module_path` in the manifest | Status |
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | `app.core.llm` | live |
 | **Aegis Router** | LangGraph | `app.agent.router` | live |
-| **Aegis Memory** | Postgres + Qdrant | `aegis.memory` | live |
-| **Aegis Cache** | Redis | `aegis.retrieval.cache` | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | `aegis.retrieval.pipeline` | live |
+| **Aegis Memory** | Postgres + Qdrant | `app.memory` | live |
+| **Aegis Cache** | Redis | `app.retrieval.cache` | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | `app.retrieval.pipeline` | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | `app.ml.model` | live |
+| **Aegis Voice** | hosted Whisper via LiteLLM | `app.voice` | live |
+| **Aegis Forecast** | Nixtla `statsforecast` (AutoARIMA/AutoETS) + conformal intervals | `app.forecast.service` | optional |
 | **Aegis Guardrails** | programmatic + NeMo Colang | `app.guardrails.rails` | live |
-| **Aegis Evals** | Real `ragas` (live) + deterministic proxies & LLM judge (offline gate) | `app.eval.harness`, `aegis.evals.libs` | live |
+| **Aegis Evals** | Real `ragas` (live) + deterministic proxies & LLM judge (offline gate) | `app.eval.harness` | live |
 | **Aegis Loop** | native | `app.ops.release` | live |
 | **Aegis Governance** | Postgres RLS + JWT | `app.core.governance` | live |
 | **Aegis Trace** | OpenTelemetry → Phoenix | `app.observability.otel` | live |
+| **Aegis Vision** | hosted Llama-3.2-90B-Vision + Presidio image redactor | `app.vision` | live |
 | **Aegis Tools / MCP** | native + MCP SDK | `app.mcp.server` | optional |
 
 The branded names label the modules; the tech column keeps every claim honest. The
-underlying code, packages and behaviour are unchanged — this is presentation, backed by
-a real manifest.
+`module_path` column is quoted from the manifest verbatim, so this table cannot silently
+disagree with the endpoint. Those `app.*` paths are **shims**: the capabilities
+themselves were extracted into the importable `aegis.*` packages, and `app.memory`,
+`app.retrieval.pipeline`, `app.guardrails.rails` and the rest re-export them so the
+manifest, the tests and any existing import keep working. See
+[`../module/MODULE_REFERENCE.md`](../module/MODULE_REFERENCE.md) for the 29 packages
+underneath, and note the deliberate arithmetic: 15 branded capabilities is the
+customer-facing subset, 29 packages is the engineering surface.
 
 ---
 
@@ -56,9 +75,9 @@ a real manifest.
 - **LangGraph** — stateful agent orchestration (directed graph with conditional edges, human-in-the-loop, durable state).
 - **LightRAG** (`lightrag-hku`) — graph+vector RAG pipeline (builds and retrieves; see §4).
 - **ML spine:** XGBoost (model) + MAPIE (conformal prediction) + SHAP (explanation). CPU-only, light.
-- **Guardrails:** Guardrails AI **or** NeMo Guardrails + self-built checks + Garak (red-team). Injection detection via **API** classifier, no local guard model. See `security.md`.
+- **Guardrails:** *resolved* — a self-built programmatic pipeline plus **NeMo Guardrails** Colang policy over the same rail functions, selected by `GUARDRAILS_ENGINE` (`programmatic` is the default; `nemo` and `both` are opt-in). Guardrails AI was not taken. Plus Garak (red-team) and an in-repo probe battery. Injection detection is a deterministic signature backstop **then** an **API** classifier — no local guard model. See `../security/overview.md`.
 - **Observability:** OpenTelemetry SDK emitting `gen_ai.*` spans → **Arize Phoenix** (local, in-process, no Docker).
-- **Reranker:** a small cross-encoder via `sentence-transformers`, OR an API-based rerank call to stay zero-footprint. **AGENT: pick based on RAM headroom at build time; ask if unsure.**
+- **Reranker:** *resolved* — a small **local cross-encoder on ONNX** (`fastembed`'s `TextCrossEncoder` over `onnxruntime`, in `aegis.retrieval.local_reranker`), with the API rerank call kept behind it as a **loud** fallback rather than a silent one. `sentence-transformers` was not taken. This question is closed; it is left in the list because the file is cited for the two-stage prescription and the answer belongs beside it.
 - **Validation/quality:** Pydantic models everywhere; Ruff (lint/format); pytest on the critical path.
 
 **Dropped on purpose:** Rust (bottleneck is API latency, not local compute), local guardrail models (RAM), Docker-dependent infra, Supabase.
@@ -98,7 +117,7 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 
 ## 3. Agent core (LangGraph)
 
-- **Loop:** perceive → reason → act → observe, repeat until done or escalate.
+- **Loop:** perceive → reason → act → observe, repeat until done or escalate. *(What shipped: **plan → gate → act → verify → reflect**, with `reflect` closing back to `plan` under a hard iteration cap. The "observe" step became a real node — `verify` checks what happened against something outside the model, in three tiers (deterministic result rows / read-back of the record / an explicit `unverifiable`), and stops a call that has failed identically three times. See `system-architecture.md` §2.3.)*
 - **Shape:** prefer **plan-and-execute** for demo clarity (visible, auditable plan), with a ReAct-style tool loop where open-endedness is needed.
 - **Tool registry:** tools are typed functions that perform real actions (create record, call API, run workflow). MCP-shaped. **Tool definitions are part of the domain adapter** — keep them in a clearly-named, swappable module.
 - **Bounded autonomy (critical):** high-risk actions OR high-uncertainty predictions route to a **human-in-the-loop gate** (a LangGraph conditional edge → approval node) instead of executing. Actions must be **idempotent**, **logged to the audit table**, and reversible where possible.
@@ -113,7 +132,9 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 - **LightRAG is the pipeline; Neo4j and the embedded vector store are the stores.** LightRAG ingests documents (`insert()`), calls an LLM to extract entities+relationships, builds the graph + embeddings, and retrieves over both at query time. Extraction + embeddings run **via API** (`gpt-4o-mini` + `text-embedding-3-large`), so nothing heavy runs locally.
 - **Why LightRAG (not Microsoft GraphRAG):** it skips the expensive community-summarization step, so indexing is fast and cheap — right for indexing synthetic data on the day. (This is an ADR-worthy decision.)
 - **Stores:** Neo4j (graph, local) + **Qdrant** (one node, shared by `aegis.retrieval` and LightRAG's own vector storage) + local Postgres (relational, KV, doc-status). No `pgvector` extension. Graph traversal answers relationship questions; vector search answers similarity questions; LightRAG uses both. *(Corrected: this line named an embedded Chroma/NanoVectorDB tier, per ADR 0009, which phase 9 §9.1 superseded — an embedded store is single-process, so `uvicorn --workers 2` failed in a way that looked like index corruption.)*
-- **Two-stage retrieval:** retrieve a wide candidate set → **rerank** → pass top context to generation.
+- **Three arms, then two-stage retrieval:** dense vectors (Qdrant), graph traversal (Neo4j), and a keyword arm — fused by **reciprocal-rank fusion at k=60** into one wide candidate pool, then **reranked** by a local ONNX cross-encoder (`aegis.retrieval.local_reranker`, fastembed over onnxruntime) with the API reranker behind it on a *loud* failure, never a silent fall-through. Top context goes to generation. *(Corrected: this prescription said "rerank" without naming the engine, and §8 below called it an LLM rerank. It is a local cross-encoder.)*
+- **The keyword arm is PostgreSQL `ts_rank`, not Okapi BM25.** The SQL scores `ts_rank(c.search_vector, …)` over a generated `to_tsvector('english', content)` column, with length normalisation and **no IDF** — so a common term and a rare one weigh the same, which is exactly the term BM25 is famous for. `RetrievalOrigin.BM25` keeps the wire value `"bm25"` because it is on the wire in three packages, in the generated OpenAPI schema and in stored provenance rows; the console relabels it **"Keyword (ts_rank)"** for a human. Nothing in this file's original text distinguished the two, which is how the name outlived the implementation.
+- **Reindex prunes.** After publishing a document's chunks, the reindex path deletes the Qdrant points that are no longer in the expected id set, so re-chunking a document converges instead of accumulating orphans — and it refuses an *empty* expected set, so a failed read cannot empty a tenant's index.
 - **Semantic cache in front:** embed query → nearest-neighbour lookup in **Redis (local)** → hit returns instantly; miss runs retrieval then writes back. Exact-match tier first, semantic tier on top.
 - **Agentic RAG:** the agent decides *what* to retrieve dynamically — this is the differentiator, not the components.
 - **Security:** apply Azure **Spotlighting** to mark retrieved content as data, not instructions (indirect-injection defense). Validate before writing to the graph (poisoning defense).
@@ -155,16 +176,16 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 
 - **OpenTelemetry spans across the full taxonomy**, each tagged with `openinference.span.kind` so **Phoenix** (local) renders the whole agent run as one nested tree — not just the model calls. What actually emits today:
   - **AGENT** — the root `agent.run` span (`agent/orchestrator.py`), parent of everything below; still the `trace_id` that links the trace to the audit log.
-  - **CHAIN** — one span per graph node (the `_timed` wrapper in `agent/graph.py` opens a span around the same node body that emits the `node_started`/`node_finished` stream events), for `ml_predict`, `plan`, `gate`, `act`, `reflect`, `generate`, `stream`.
+  - **CHAIN** — one span per graph node (the `_timed` wrapper in `agent/graph.py` opens a span around the same node body that emits the `node_started`/`node_finished` stream events). The compiled graph is **18 nodes and 24 edges** today, and `GET /v1/agent/topology` reads that shape off the compiled LangGraph rather than restating it: `guard_input`, `route`, `answer_memory`, `recall_memory`, `persist_memory`, `plan_team`, `run_team`, `synthesize`, `retrieve`, `plan`, `gate`, `approval`, `act`, `verify`, `reflect`, `generate`, `guard_output`, `stream`. *(Corrected: this list named an `ml_predict` node, which is not in the graph, and predated `verify`.)*
   - **RETRIEVER** — the `retrieve` node span, carrying the query and the honest recall funnel (N candidates → K results).
-  - **RERANKER** — the LLM rerank stage inside `retrieval/pipeline.py`.
+  - **RERANKER** — the rerank stage inside `retrieval/pipeline.py`: the **local ONNX cross-encoder**, with the API reranker as the loud fallback. *(Corrected: it was described here as an LLM rerank.)*
   - **GUARDRAIL** — the `guard_input` / `guard_output` node spans, carrying the rail stage, verdict, and layer.
   - **TOOL** — one span per tool execution in the `act` node (tool name, risk, ok).
   - **LLM / EMBEDDING** — the existing `gen_ai.*` chat/embedding spans (`observability/genai.py`), now also tagged with their OpenInference kind.
 
   The span helper (`observability/spans.py`) degrades to a **no-op** when no tracer/Phoenix is configured (offline "lite" mode and tests), so instrumentation never crashes or requires the network. Being OTel-native = portable, no lock-in (an ADR-worthy point).
 - **Token/cost tracking** from the spans → the live dashboard (cache-hit rate, small-model share, cost per 1000 queries).
-- **Offline evals:** the quality gate (`app.eval`) computes **RAGAS-style deterministic proxies** — lexical/overlap proxies inspired by RAGAS metric ideas, **not** the `ragas` library — which IS a dependency of this repo and is used for live scoring in `aegis.evals.libs`, but is deliberately not used *here*, because this gate must run in CI with no network and no model spend. Three proxies are computed and asserted against thresholds:
+- **Offline evals:** the quality gate (`app.eval`) computes **RAGAS-style deterministic proxies** — lexical/overlap proxies inspired by RAGAS metric ideas, **not** the `ragas` library. `ragas>=0.4.3,<0.5` *is* a real dependency of this repo (the backend's `evals-libs` extra, installed in the venv) and `aegis.evals.libs` runs its actual metrics for live scoring, every judge call routed through the Aegis gateway so it is budget-checked, rate-limited, traced and written to `usage_ledger`. It is deliberately not used *here*, because this gate must run in CI with no network and no model spend. Three proxies are computed and asserted against thresholds:
   - **context-precision proxy @k** — fraction of the top-k retrieved sources whose document is a gold document (proxy for RAGAS *context precision*);
   - **context-recall proxy** — fraction of the case's gold documents that appear anywhere in the retrieved sources (proxy for RAGAS *context recall*);
   - **groundedness/faithfulness proxy** — fraction of the case's expected claim keywords present, by normalized substring match, in the assembled retrieval context (proxy for RAGAS *faithfulness*).

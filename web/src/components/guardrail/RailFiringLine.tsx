@@ -374,13 +374,15 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
       resolve()
       return
     }
-    let timer: ReturnType<typeof setTimeout>
+    // `done` closes over `timer`, which is declared after it: legal, because the only
+    // two callers — the timeout itself and the abort listener registered below — can
+    // only run after this synchronous block has finished binding it.
     const done = (): void => {
       clearTimeout(timer)
       signal.removeEventListener('abort', done)
       resolve()
     }
-    timer = setTimeout(done, ms)
+    const timer: ReturnType<typeof setTimeout> = setTimeout(done, ms)
     signal.addEventListener('abort', done, { once: true })
   })
 }
@@ -516,7 +518,7 @@ export function RailFiringLine({ rails }: RailFiringLineProps): ReactElement {
               <code className="font-mono">check_input</code> and streams its verdict. Nothing here
               is replayed from the stored report — only the payloads are. One benign payload is
               fired first to load the PII model, and is neither plotted nor counted, so the chart
-              carries the rail's steady-state cost rather than process startup.
+              carries the rail&apos;s steady-state cost rather than process startup.
             </InfoTip>
           </div>
         }

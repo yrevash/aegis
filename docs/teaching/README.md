@@ -120,8 +120,13 @@ shows and what to say about it:
   every layer and store as one picture. Start here if you want the whole platform before
   any single module.
 - [`../compliance/README.md`](../compliance/README.md) — the control-by-control position
-  against twelve published frameworks.
+  against thirteen published frameworks: 124 controls, 38 of them enforced.
 - [`../install/README.md`](../install/README.md) — getting it running.
 
-Notifications and compliance are not `aegis.*` modules and so have no file here; both are
-documented in `../architecture/system-architecture.md`.
+Notifications, compliance and the published-standards surfaces are not `aegis.*` modules
+and so have no file here; all are documented in
+`../architecture/system-architecture.md`. The last of those is what the console's
+**Interop** screen renders — the A2A 1.0 agent card and JSON-RPC endpoint, the
+`aegis-adapter-tools` MCP server, the CycloneDX 1.6 AgBOM at
+`GET /v1/platform/agbom`, and the OpenTelemetry export — and every one of them is
+served by `backend/src/app`, not by a package under `aegis/`.

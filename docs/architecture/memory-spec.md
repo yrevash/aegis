@@ -81,8 +81,21 @@ greedy-fill each tier to a per-tier cap with cross-tier dedup (`seen_fact_keys`)
 2-level hierarchical summary for very long sessions; extractive fallback (no LLMLingua).
 
 **Poisoning/isolation:** guard content on WRITE (`deps.check_input` + PII redact before it
-becomes memory); spotlight tiers 5–6 on READ (untrusted); RLS + `subject_id` WHERE isolate
-per tenant/subject (belt-and-suspenders).
+becomes memory); spotlight tiers 5–6 on READ (untrusted); `subject_id`/`tenant_id` WHERE
+isolates per tenant/subject, with RLS behind it (belt-and-suspenders — see the correction
+under BLOCKER 2 for which of the two is load-bearing).
+
+> **What shipped for the write path is stronger than this line.** The generic
+> `deps.check_input` became a dedicated fourth rail stage, `GuardStage.MEMORY_WRITE`
+> (`aegis.guardrails.memory_write`), screening a candidate fact at `_reconcile` before it
+> reaches the durable store, with refusals written to `memory_write_log` under their own
+> operation. It exists because the other three stages structurally *cannot* see this
+> attack: the turn that poisons the store and the turn poisoned by it are different turns.
+> The screen (`app.memory.screen.memory_write_screen`) is bound on **both** drain paths —
+> `MemoryDeps._run_consolidation` on the hot path after every turn, and the 60-second
+> backstop sweeper in `app.main` — because binding one and leaving the other is how the
+> rail came to be unbound while looking wired. Test:
+> `backend/tests/memory/test_write_screen_bound.py`.
 
 **Config (`MemoryConfig`):** raw_window_turns=40, k_fact=20/n_fact=6, k_epi=20/n_epi=4,
 consolidation_every_n=4, tau_extract=0.55, n_skill=2, CTX_TOKEN_CAP=8000, answer_reserve=1200,
@@ -120,8 +133,11 @@ resolves `memory_subject = ADAPTER.memory_subject_for(auth, persona)`; `run_agen
 Mirrors the ML adapter pattern (core never knows domain nouns).
 
 **Schemas/RLS:** models in `memory/stores.py` (`VectorType(3072)`, `JsonB`, nullable
-`tenant_id` FK, cross-dialect for SQLite tests). Add the 5 memory tables to `_RLS_TABLES`
-in `data/session.py` (auto RLS via `bootstrap_rls()`); recall/persist call `set_tenant_scope`.
+`tenant_id` FK, cross-dialect for SQLite tests). Register the memory tables for RLS (auto
+via `bootstrap_rls()`); recall/persist call `set_tenant_scope`. *(As built: **six** memory
+tables, and the registry is `_TENANT_SCOPED_TABLES` in `aegis/src/aegis/governance/rls.py`,
+not `_RLS_TABLES` in `data/session.py` — `set_tenant_scope` is still re-exported through
+`app.data.session`.)*
 HNSW cosine index in the embedded vector store; btree `(subject_id, created_at DESC)` in Postgres; partial
 index `WHERE invalid_at IS NULL AND expired_at IS NULL`.
 
@@ -180,6 +196,22 @@ memory row is invisible to its own reader, and an unset GUC admits nothing. Ther
 memory tables to `_RLS_TABLES` — either make `tenant_id` NOT NULL with a sentinel default tenant, OR
 give memory tables a NULL-tolerant policy (`tenant_id IS NULL OR tenant_id = NULLIF(...)::int`). Test
 E7 must prove isolation with RLS OFF (SQLite) via the app-level WHERE alone.
+
+> **Correction, 2026-08-28 — the premise changed, the conclusion did not.** The policy this
+> paragraph describes is no longer the one that gets installed. The registry moved to
+> `_TENANT_SCOPED_TABLES` in `aegis/src/aegis/governance/rls.py` (25 tables, including all
+> **six** memory tables — `memory_fact`, `memory_message`, `memory_profile`,
+> `memory_session`, `memory_write_log`, `memory_consolidation_job`), and the installed
+> `tenant_isolation` predicate is `substring(current_setting('app.tenant_id', true) from
+> '^[0-9]+$') IS NULL OR tenant_id = substring(…)::int` — which **fails OPEN** on an
+> unbound, empty or non-numeric GUC, because `rls_fail_closed` defaults to `False`. So the
+> hazard this blocker warned about (a memory row invisible to its own reader) does not
+> arise, and the *opposite* hazard would if the app-level predicate were ever dropped.
+> The instruction stands, and stands harder: **the app-level `WHERE subject_id=… [AND
+> tenant_id…]` is the isolator**, and RLS is the inert layer beneath it until
+> `RLS_FAIL_CLOSED=true` installs the closed predicate. E7 proving isolation with RLS off
+> is exactly the right test, and it is testing the thing that actually carries the
+> boundary.
 
 **BLOCKER 3 (HIGH) — no LLM on the read hot path.** The token-budget overflow valve must be
 **non-LLM**: drop the oldest raw turn / extractive-truncate / fold the already-existing running summary.

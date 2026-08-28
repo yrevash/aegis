@@ -2,9 +2,16 @@
 
 These are **RAGAS-style deterministic proxies** — inspired by RAGAS metric *ideas* but
 computed here with transparent token/substring overlap, with **no external LLM and no
-`ragas` library** (the `ragas` package is not a dependency: it needs a network/LLM and
-this gate runs fully offline). They are proxies, not the RAGAS-the-library metrics they
-are named after. Three are computed:
+`ragas` import on this path**. They are proxies, not the RAGAS-the-library metrics they
+are named after.
+
+The parenthetical here used to read "the `ragas` package is not a dependency", and that
+is no longer true: ``ragas>=0.4.3`` **is** a dependency, and
+:mod:`aegis.evals.libs.ragas_suite` runs the real library's metrics through the
+platform's metered gateway. This module deliberately does not use it. The offline gate
+has to be free, deterministic, and runnable in CI with no keys and no network — a
+judged metric is none of those — so the two coexist for different jobs rather than one
+replacing the other. Three are computed:
 
 - **context-precision proxy @ k** — of the top-k retrieved sources, the fraction whose
   source document is one of the case's gold documents (are the retrieved passages

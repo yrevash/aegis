@@ -8,6 +8,12 @@
 > **Verified against the running system on 2026-08-23.** Figures quoted below are
 > from that moment and are **illustrative** — they will differ on the day. The
 > *sources* (endpoint, table, role) will not.
+>
+> **Refreshed against the code on 2026-08-28** for the changes that landed since:
+> the new **Interop** screen, the audit trail's hash chain and its verify button,
+> the MCP server's rename, and the compliance totals. Sections marked *"read from
+> the code, not re-walked"* were checked against the component and the endpoint
+> rather than by looking at a running box.
 
 ---
 
@@ -29,19 +35,23 @@ time it is deliberate. Say so before a jury asks.
 
 ### The nav, in order
 
-The rail groups the twelve sections under two headings. This is the order the
+The rail groups the thirteen sections under two headings. This is the order the
 screens appear in and the order this document walks them.
 
 **Workspace** — Overview · Analytics · Forecast · Console
-**Governance** — Approvals · Governance · Roles & Access · Jobs · Audit · Database · MCP · Settings
+**Governance** — Approvals · Governance · Roles & Access · Jobs · Audit · Database · MCP · Settings · Interop
 
 *(Source: `web/src/lib/portal.ts` → `ROLE_SECTIONS.platform_admin`, grouped by
 `web/src/components/layout/navGroups.ts`. There is no second list anywhere; a
 test reads that file.)*
 
-**Compliance is not on this portal.** Aegis has a Compliance screen — 114 controls
-across 12 frameworks — but it lives on the **DevOps** portal, not here. If a juror
-asks about compliance, say where it is rather than improvising.
+**Compliance is not on this portal.** Aegis has a Compliance screen — **124
+controls across 13 frameworks, 38 of them enforced** — but it lives on the
+**DevOps** portal, not here. If a juror asks about compliance, say where it is
+rather than improvising, and quote the enforced count rather than the total: the
+page itself leads with what is enforced and puts the rest one click away, for the
+same reason. *(Counts derived from `app.platform.compliance.build_compliance()`,
+which is also what `docs/compliance/README.md` is asserted against.)*
 
 ### Chrome that is on every screen
 
@@ -51,6 +61,23 @@ asks about compliance, say where it is rather than improvising.
 | Text-size control | Steps the whole console's type scale. It is in the top bar *and* on Settings on purpose — the person who needs it is already on a page they cannot read. |
 | Alerts bell | Real `GET /notifications` rows (ingest finished, approval raised…), each linking to the screen that shows the thing. |
 | Signed in as | `admin`, Platform admin portal |
+| Closed listings | Every panel whose body is a list of rows — documents, approvals, audit entries, jobs, prompts, seats, probes, components — opens as **one bar** carrying its title, its row count and one key figure. **Hover expands it; click pins it open.** One surface per page stays open: the thing the page is named after. |
+
+**Know this before you demo, because it changes how you click.** The rule is
+DESIGN.md §4, and the forcing function is you: the whole platform is presented in
+ten to fifteen minutes, and a reviewer arriving on a screen gets a few seconds to
+decide what it is. Spending those seconds scrolling past forty rows to find the one
+figure that matters is a screen that failed, however correct the table was. So a
+listing reads `Documents  ·  10 rows · 7 ingested` and nothing else until you ask
+for more.
+
+Two properties are worth naming out loud if a juror asks: the rows are **collapsed,
+never `display:none`** — they stay in the accessibility tree and reachable by
+keyboard, and the trigger is a real `<button>` carrying `aria-expanded`. And the
+**pin survives the pointer leaving**, because hover is for a glance and the pin is
+for the reviewer who actually wants to read.
+
+*(Read from `DESIGN.md` §4, not re-walked.)*
 
 ---
 
@@ -329,14 +356,23 @@ screen). Quote it as "roughly six hundred and growing", not as a fixed number.
 
 **"Are the per-node costs real?"**
 Yes. Each node emits a `node_finished` event carrying its model, tokens, duration
-and USD. A local node (guardrails, routing, gate, reflect) shows `—` for cost
-rather than `$0.00`, because it never called a model.
+and USD. A local node (guardrails, routing, gate, verify, reflect) shows `—` for
+cost rather than `$0.00`, because it never called a model.
 
 **"Can I see a run that failed?"**
 Yes, and it is more interesting. The event log shows tool errors verbatim (a
 Pydantic enum validation failure, a "no skill named X is in force for you"), the
-reflect node re-planning, and the iteration budget being exhausted at round 2/2.
-Nothing is smoothed over.
+verify node's verdict on the round, the reflect node re-planning, and the
+iteration budget being exhausted. Nothing is smoothed over.
+
+**"What is the `verify` node?"**
+The one that decides whether the round actually worked, and it sits between `act`
+and `reflect`. `act` used to report its own success, which meant a tool that
+updated the wrong record and returned `ok=True` counted as "goal met". `verify`
+judges against something *outside* the model — the rows in hand first, then a
+read-only read-back proving the write landed, and a judge call only where those
+were inconclusive. It also stops an oscillation: the same call failing identically
+three times ends the loop rather than spending the rest of the budget on it.
 
 ### Anything deliberately absent
 
@@ -626,7 +662,31 @@ which trace, and who approved it.
 
 ### What is on it
 
-**Top — the insight layer** (`audit/AuditInsights.tsx`)
+**Top — the chain strip** (`admin/AuditLog.tsx`; read from the code, not re-walked)
+
+A single card above the insights, with a **Verify the chain** button. Before you
+press it, it explains itself in one line:
+
+> *Every row is hashed with its predecessor's hash mixed in, so an edited row
+> breaks itself and a removed one breaks everything after it.*
+
+Press it and it walks `GET /v1/audit/verify` — `Walking the chain…` while it runs,
+then a badge reading **`chain intact`** or **`broken at #<id>`**, the count of rows
+verified, and — separately, and only when it is non-zero — how many rows *predate*
+the chain:
+
+```
+chain intact    <n> verified    <m> predate the chain, not covered
+```
+
+*(Figures not verified — this strip was added after the 2026-08-23 walk. The two
+counts will be whatever the box holds on the day.)* That second figure is never
+folded into the verdict. Rows written before the chain
+existed carry no hash, and nothing can be proved about history nobody hashed; a
+green tick covering them would be exactly the overclaim the endpoint exists to
+retire.
+
+**Then — the insight layer** (`audit/AuditInsights.tsx`)
 
 Charts lead, the trail sits beneath as the thing they are derived from. A
 3,000-row log read as a table can only be *searched*, which means you have to
@@ -664,6 +724,16 @@ REVOKE UPDATE, DELETE ON public.audit_log FROM aegis_app;
 -- same for run_events (and every month partition) and usage_ledger
 ```
 
+Then press the button, because the grant is only half the argument:
+
+> "The grant stops the *application* rewriting this. It does not stop whoever holds
+> the owner connection. So every row also carries its predecessor's hash mixed into
+> its own — press Verify and the server re-derives every hash and walks the chain.
+> A per-row hash would only prove no row was *edited*; the chain is what catches a
+> row **removed**, which is the quieter attack, because delete a row and everything
+> after it stops verifying. And it tells you honestly how many rows predate the
+> chain and are therefore not covered at all."
+
 Then the filter demo:
 
 > "Every filter runs on the *server*. Changing one re-runs the query rather than
@@ -683,6 +753,18 @@ actor, the action prefix and the time range, and nothing else. If you have set a
 model or outcome filter, a bar appears saying the CSV *"cannot narrow by <those>,
 so it will hold more rows than the table below."* A file that quietly holds more
 than the table it came from is evidence of the wrong thing.
+
+**"Could someone just re-derive the whole chain after editing a row?"**
+With the owner connection, yes. This is tamper **evidence**, not tamper
+prevention, and saying so is the honest answer. What it costs an attacker is that
+a single quiet `UPDATE` or `DELETE` is no longer enough — they have to rewrite
+every row after it, and the unique index on `(tenant_id, prev_hash)` means they
+cannot splice a fork in without the insert failing.
+
+**"Whose chain am I verifying?"**
+Yours, or the tenant you named. Chains are per tenant precisely so this answer is
+reachable without handing anybody another tenant's rows — the endpoint is scoped
+exactly like `GET /v1/audit` and additionally requires `seat.can_view_tenant_audit`.
 
 **"Why is `memory_write_log` not append-only?"**
 Deliberately excluded, and written down: the DPDP/GDPR erasure route
@@ -750,7 +832,7 @@ On the missing SQL box:
 > "There is no free-form SQL box, and that is a decision with a reason, not a
 > backlog item. Metabase disables native SQL for any database with row or column
 > security because it cannot parse SQL well enough to know which tables a query
-> touches. We have `tenant_isolation` on nineteen relations. So every read is
+> touches. We have `tenant_isolation` on twenty-five relations. So every read is
 > assembled by the server with the tenant filter welded into the `WHERE`."
 
 On auditing:
@@ -838,6 +920,13 @@ And on the self-connection:
 > tool list is a function of who is asking, so an admin and a tenant user
 > connecting to the same URL see different lists."
 
+**The server identifies itself as `aegis-adapter-tools`.** It used to say
+`tcs-adapter-tools`, and that name travelled: it is in the `serverInfo` of every
+`initialize` response and in the `_meta` of every tool result, so a peer's logs
+recorded it. A platform whose central claim is that it is domain-agnostic should
+not be shipping one customer's initials in its protocol handshake. *(Read from
+`backend/src/app/mcp/server.py`, not re-walked.)*
+
 ### What a jury might ask
 
 **"Can I call a tool from here?"**
@@ -880,11 +969,14 @@ and can only tighten.
 
 1. **Text size** — the one control that changes nothing on the server and
    everything about whether the rest of the screen is readable.
-2. **Settings catalogue** — a rail of key namespaces and a panel. Verified live:
-   **25 controls** across 6 namespaces — `guardrails` (7), `agent` (6), `seat` (6),
-   `jobs` (3), `memory` (2), `skills` (1). The rail says how many controls each
-   namespace holds and how many are inert or read-only, so what is *not* on screen
-   is still counted.
+2. **Settings catalogue** — a rail of key namespaces and a panel. **27 controls**
+   across 6 namespaces — `agent` (8), `guardrails` (7), `seat` (6), `jobs` (3),
+   `memory` (2), `skills` (1). The rail says how many controls each namespace holds
+   and how many are inert or read-only, so what is *not* on screen is still
+   counted. *(Counts read from `SETTING_SPECS`, not re-walked — `agent` grew by two
+   when the trajectory token ceilings landed: `agent.max_trajectory_tokens` at
+   36,000 and `agent.max_tool_result_tokens` at 4,000, both `tighten_only`, both
+   enforced on the main graph and on every sub-agent lane.)*
 3. **Skills** — write a skill, switch it on, and see which layer decided it.
    Resolved `platform ∪ tenant ∪ user`.
 4. **Tool roster** — "6 of 9", and why the other three. A read-only projection of
@@ -953,6 +1045,98 @@ sentence says so when the fold decided something other than what was submitted.
 
 ---
 
+## 13 · Interop
+
+*Route: `/app/platform_admin/interop` · Component: `interop/InteropView.tsx` ·
+nav hint `A2A · MCP · CycloneDX`*
+
+*(Read from the code, not re-walked. It is the newest screen on this portal, and
+the same screen appears on the AI-team and DevOps portals.)*
+
+### What this screen is for
+
+The published standards a buyer's own tooling can talk to, on a page. A2A, MCP and
+CycloneDX were real, tested and served — and had **no surface at all**, findable
+only by someone who thought to curl a well-known path.
+
+### What is on it
+
+**Four protocol cards**, each with its spec mark, one line, and its endpoints
+printed in full so a reader can check them:
+
+| Card | Spec | Endpoints |
+|---|---|---|
+| **A2A** | Agent2Agent 1.0 | `/.well-known/agent-card.json` · `/.well-known/jwks.json` · `/v1/a2a` |
+| **MCP** | Model Context Protocol | `/v1/mcp` |
+| **CycloneDX** | 1.6 | `/v1/platform/agbom` · `/v1/stack/sbom` |
+| **OpenTelemetry** | GenAI semconv + OpenInference | `aegis.observability.semconv` |
+
+The A2A badge is a **live probe**: the page fetches the agent card on mount,
+unauthenticated — the same request a peer makes — and reads `answering` or `no
+answer`. The other three read `served`.
+
+**"What this agent advertises"** — a collapsed panel, `2 skills · protocol 1.0`,
+opening onto the two skills (`answer-with-provenance`, `governed-action`) and the
+`JSONRPC → /v1/a2a` interface, read from the card this deployment serves. Note
+what the card *does not* claim: every entry in `capabilities` is `false`, because
+streaming, push notifications and the extended agent card are not served.
+
+**"Why this is safe to expose"** — the security card:
+
+> A2A's `tenant` field arrives before authentication and is attacker-controlled.
+> It selects which agent is addressed and never sets the database scope — that
+> comes from the bearer token alone.
+>
+> **4 spellings refused** — `"2"` · `"07"` · `"٧"` · `"abc"`
+
+### What to say when demoing it
+
+> "This is the part of Aegis another company's systems can talk to. Three
+> standards, every endpoint on the screen, and the A2A badge is a live probe
+> rather than a claim — the page makes the same unauthenticated request a peer
+> agent would."
+
+Then the card that matters on this portal:
+
+> "A2A carries a `tenant` routing field, and it arrives before authentication, so
+> it is attacker-controlled. If it set the database scope we would have handed
+> every caller on the internet a tenant selector — the entire isolation model
+> defeated by a string in a request body. It selects *which agent is addressed*
+> and nothing else. And look at the four refused spellings: `2`, `07`, an
+> Arabic-Indic seven, and `abc`. Every one comes back with the **identical** code
+> and message, because a caller who can tell 'wrong tenant' from 'no such tenant'
+> has an enumeration oracle."
+
+### What a jury might ask
+
+**"Is the agent card signed?"**
+Only when `a2a_public_origin` is configured, and the history is worth telling. An
+earlier version took the origin from `request.base_url`, which honours the `Host`
+header — so a request with `Host: evil.com` came back with a card **signed by this
+platform's real key** whose interface URL and whose `jku`, inside the *signed*
+protected header, both pointed at the attacker. Our own signature certified a
+document telling peers to send their bearer tokens somewhere else, cacheable for
+five minutes. With no configured origin the card ships honestly: relative
+interface URLs, `Cache-Control: no-store`, and **no** `signatures` array. A
+signature over a guessed origin is worth less than none, because it looks
+authoritative.
+
+**"What is in the AgBOM, and can I diff it?"**
+25 components in CycloneDX 1.6, served as `application/vnd.cyclonedx+json`: the 4
+domain tools with their risk tiers, 14 model deployments — the 12 declared in the
+fleet **plus** the ones this deployment actually routed to and never declared —
+the 4 guard stages including `memory_write`, and 3 knowledge sources. The
+`serialNumber` is derived from the content, so two pulls of an unchanged
+deployment are byte-identical and a diff means something really changed.
+
+**"An AgBOM is not an SBOM."**
+Correct, and both are served. `/v1/stack/sbom` is the dependency bill; `/v1/platform/agbom`
+is the *agent* bill — the tools it can call, the models it routes to, the rails it
+runs and the corpora it reads. The second is the one a reviewer of an agentic
+system actually needs, and it is the one nobody publishes.
+
+---
+
 ## The three claims worth rehearsing
 
 If you get five minutes, these three are the ones that hold up under a hostile
@@ -969,20 +1153,43 @@ Do it live, in this order:
 | Sign in as `northwind.admin` → Approvals | tenant_admin | The gate is **not there** — not hidden, absent |
 | Sign in as `vertex.admin` → Approvals | tenant_admin | The same gate, decidable |
 | Database → *Read as: Northwind / Vertex* | platform_admin | Same query, one clause, different rows |
+| Ask *"which requests are open?"* as `northwind.admin`, then as `vertex.admin` | tenant_admin | Two different sets of request ids — the demo desk is per tenant |
 
-Underneath all of it: Postgres row-level security with `FORCE`, and a serving role
-(`aegis_app`) that is `NOSUPERUSER NOBYPASSRLS`. `/readyz` reports it as a health
-component: *"Serving as 'aegis_app': no SUPERUSER, no BYPASSRLS."*
+Underneath all of it: Postgres row-level security with `FORCE` on **twenty-five**
+relations, and a serving role (`aegis_app`) that is `NOSUPERUSER NOBYPASSRLS`.
+`/readyz` reports it as a health component: *"Serving as 'aegis_app': no SUPERUSER,
+no BYPASSRLS."*
+
+**The last row of that table is the newest, and it closes a real hole.** The
+adapter's synthetic record store — the desk the demo tools act on — was one
+process-wide global. Measured: `northwind.admin` and `vertex.admin` each asked for
+open requests and both received the **identical** 25 ids out of the identical "40
+matching requests" set, reached by two independent auditors from two different
+surfaces (A2A and MCP). Nothing real leaked — those records are synthetic — but
+*"the isolation holds except in the data we demonstrate it with"* is not defensible
+in front of a jury trying two logins side by side. The store is now keyed by
+tenant, and the invariant that mattered is preserved and narrowed: still exactly
+one store **per tenant**, so a note added over MCP is still visible to the agent
+looking at the same request.
 
 Verified spend on 2026-08-23 (illustrative): Northwind $5.88, Vertex $0.39,
 platform total $6.43 over 30 days.
 
-### 2 · The audit trail is append-only by privilege
+### 2 · The audit trail is append-only by privilege, and checkable by hash
 
 Not by convention, not by an ORM that avoids `DELETE`. `UPDATE` and `DELETE` are
 revoked from the serving role on `audit_log`, `run_events` (and every month
 partition) and `usage_ledger`. Postgres refuses. Demonstrable in psql in ten
 seconds.
+
+And because a grant does not bind whoever holds the *owner* connection, every
+`audit_log` row carries its predecessor's hash mixed into its own. **Verify the
+chain** on the Audit screen walks `GET /v1/audit/verify`: the server re-derives
+every hash and reports `chain intact` or the first break. A per-row hash proves
+only that no row was *edited*; the chain is what catches a row **removed**. It is
+tamper evidence, not tamper prevention — say that rather than let a juror find it
+— and rows written before the chain existed are reported separately as not covered
+rather than folded into a green tick.
 
 ### 3 · The human gate survives a restart
 
