@@ -70,6 +70,7 @@ from aegis.governance.context import (
     reset_governance_context,
     set_governance_context,
 )
+from aegis.guardrails.memory_write import MemoryWriteCandidate
 from aegis.redteam.battery import (
     DEFAULT_SUITE_ID,
     SUITES,
@@ -514,6 +515,17 @@ async def _rails_for(*, live: bool) -> Rails:
     async def screen_tool_result(text: str, *, completer: object = None) -> Any:  # noqa: ANN401
         return await pipeline.check_tool_result(text, tool_name="redteam.probe")
 
+    async def screen_memory_write(text: str, *, completer: object = None) -> Any:  # noqa: ANN401
+        # The runner only needs the verdict, so the rewritten fields are dropped here.
+        # The WRITE path uses the pipeline method directly and must keep them — a
+        # caller that stores the strings it sent has not redacted anything.
+        verdict = await pipeline.check_memory_write(
+            MemoryWriteCandidate(
+                subject="", predicate="", object="", text=text, origin="redteam.probe"
+            )
+        )
+        return verdict.result
+
     # The write-time gate is not part of the tenant's guardrail pipeline: it is pure
     # code with no policy and no completer, and a tenant cannot loosen it. So this one
     # is the runner's own adapter over ``validate_content`` rather than a closure over
@@ -527,6 +539,10 @@ async def _rails_for(*, live: bool) -> Rails:
         check_tool_result=screen_tool_result,
         check_ingest=check_ingest,
         check_sequence=check_sequence,
+        # The memory-write rail is the inbound chain over a candidate fact, so it gets
+        # the same closure over the live pipeline the other payload stages get — a
+        # tenant's own configuration screens its own probes.
+        check_memory_write=screen_memory_write,
     )
 
 

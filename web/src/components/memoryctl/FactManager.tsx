@@ -181,7 +181,7 @@ export function FactManager({
             placeholder="value…"
             className="h-8 w-44"
           />
-          <Figure className="ml-auto text-[0.62rem] leading-4 text-muted-foreground">
+          <Figure className="ml-auto text-[0.6875rem] leading-4 text-muted-foreground">
             {draft.length}/{MAX_CHARS}
           </Figure>
           {/* Enabled until the request starts, then a spinner in the icon's slot —
@@ -196,7 +196,7 @@ export function FactManager({
           </Button>
         </div>
         {/* A status hue with its icon and its word, not a paragraph. */}
-        <p className="flex items-center gap-1.5 text-[0.68rem] text-muted-foreground">
+        <p className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
           <ShieldCheck className="size-3.5 shrink-0 text-ok-ink" aria-hidden />
           Screened before it is stored
         </p>
@@ -253,7 +253,7 @@ export function FactManager({
                     <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
                       Cancel
                     </Button>
-                    <span className="text-[0.66rem] text-muted-foreground">
+                    <span className="text-[0.6875rem] text-muted-foreground">
                       The old wording is kept as history, not overwritten.
                     </span>
                   </div>
@@ -291,7 +291,7 @@ export function FactManager({
                   <span className="min-w-0 flex-1 text-sm break-words text-foreground">
                     {fact.text}
                   </span>
-                  <Badge tone="neutral" className="tabular shrink-0 text-[0.56rem]">
+                  <Badge tone="neutral" className="tabular shrink-0 text-[0.6875rem]">
                     #{fact.id}
                   </Badge>
                   <Button

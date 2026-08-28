@@ -68,7 +68,7 @@ export function KpiHero({
         <span className="eyebrow">{label}</span>
         {info != null && <InfoTip label={`About ${label}`}>{info}</InfoTip>}
         {sample && (
-          <span className="eyebrow ml-auto rounded-sm border border-border px-1.5 py-0.5 text-[0.58rem]">
+          <span className="eyebrow ml-auto rounded-sm border border-border px-1.5 py-0.5 text-[0.6875rem]">
             sample
           </span>
         )}

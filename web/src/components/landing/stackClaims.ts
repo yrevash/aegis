@@ -107,8 +107,18 @@ export const STACK_CLAIMS: readonly StackClaim[] = [
   },
   {
     mark: 'Offline eval gate',
-    mechanism: 'RAGAS-style deterministic proxies — no LLM call, no ragas dependency',
+    mechanism: 'Deterministic lexical proxies — no LLM call, no network',
     path: 'aegis/src/aegis/evals/metrics.py',
+  },
+  {
+    // Two rows, not one, and README.md already had this right. The single mutated row
+    // said "Offline eval gate" over a sentence describing the LIVE gate, pointing at
+    // `metrics.py` — the deterministic module that contains no ragas and never calls a
+    // model. A juror who follows the receipt, which is the entire design of this grid,
+    // landed on a file that disproved the sentence above it.
+    mark: 'Live eval (ragas)',
+    mechanism: 'The real ragas metrics, judged through the Aegis gateway',
+    path: 'aegis/src/aegis/evals/libs/gateway_adapters.py',
   },
   {
     mark: 'OpenTelemetry + OpenInference',

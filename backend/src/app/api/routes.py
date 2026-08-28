@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from aegis.governance.audit import verify_audit_chain
 from aegis.gateway.routing import (
     DeploymentNotAllowedError,
     deployment_for_choice,
@@ -77,6 +78,9 @@ from app.api.schemas import (
     ApprovalInboxRow,
     ApprovalRequest,
     ApprovalResponse,
+    AuditChainResponse,
+    LiveEvalResponse,
+    LiveMetricRow,
     AuditLogResponse,
     BudgetRow,
     BudgetUpsertRequest,
@@ -2016,6 +2020,81 @@ async def platform_public_metrics(
 _AUDIT_LIMIT_MAX = 200
 
 
+@router.get("/platform/agbom", tags=["platform"])
+async def platform_agbom(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> JSONResponse:
+    """The Agent Bill of Materials — every tool, model and rail this agent is made of.
+
+    The dependency SBOM at ``GET /stack/sbom`` answers "what packages is this built
+    from". This answers the question a package manifest cannot: **what can this agent
+    do**. Which tools exist and at what risk tier, which model deployments answer which
+    role, which guard stages screen the traffic.
+
+    That distinction is why the March 2026 litellm compromise is the right thing to point
+    at. Pinning dependencies is necessary and it is not an inventory, and "we are clean"
+    was, until this endpoint, a claim nobody outside could check.
+
+    CycloneDX 1.6 so a buyer's existing scanner reads it. One deliberate divergence from
+    the OWASP AOS example is documented in :mod:`app.platform.agbom`: tools are emitted as
+    ``application`` because ``tool`` is not a CycloneDX component type, and a document
+    that fails validation defeats the point of using a standard format.
+
+    Served as ``application/vnd.cyclonedx+json``, the media type registered for this
+    format — the same one the sibling dependency SBOM already returns. A CycloneDX
+    document served as generic ``application/json`` is one a content-negotiating scanner
+    has no reason to recognise, which undoes the entire argument for choosing a standard
+    format over a bespoke one.
+
+    Args:
+        auth: The authenticated admin/devops principal.
+    """
+    from app.platform.agbom import build_agbom
+
+    return JSONResponse(
+        content=build_agbom(), media_type="application/vnd.cyclonedx+json"
+    )
+
+
+@router.get("/audit/verify", response_model=AuditChainResponse, tags=["audit"])
+async def audit_verify(
+    tenant_id: int | None = None,
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> AuditChainResponse:
+    """Walk the audit chain and report the first break, if any.
+
+    This is the difference between "append-only because a grant says so" and
+    "append-only, and here is how you check". Every row is hashed with its predecessor's
+    hash mixed in, so editing a row breaks that row and **removing** one breaks
+    everything after it — the quieter attack, and the one a per-row hash cannot see.
+
+    Scoped exactly like ``GET /audit``: a tenant-bound caller verifies its own chain, a
+    platform admin may name a tenant. Chains are per tenant precisely so this answer is
+    reachable without handing anybody another tenant's rows.
+
+    ``unchained`` is reported separately and never folded into ``intact``. Rows written
+    before the chain existed carry no hash, and nothing can prove anything about history
+    nobody hashed — a green tick covering them would be the overclaim this endpoint
+    exists to retire.
+
+    Args:
+        tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name
+            its own.
+        auth: The authenticated admin/devops principal; the sole source of the scope.
+    """
+    await _require_seat(auth, "seat.can_view_tenant_audit")
+    scoped = _scope_tenant(auth, tenant_id)
+    result = await verify_audit_chain(scoped)
+    return AuditChainResponse(
+        intact=result.intact,
+        checked=result.checked,
+        unchained=result.unchained,
+        broken_at=result.broken_at,
+        detail=result.detail,
+        head=result.head,
+    )
+
+
 @router.get("/audit", response_model=AuditLogResponse, tags=["audit"])
 async def audit(
     limit: int = 50,
@@ -3877,6 +3956,76 @@ async def ml_model_card(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     return model.model_card()
+
+
+@router.post("/evals/live-run", response_model=LiveEvalResponse, tags=["evals"])
+async def evals_live_run(
+    limit: int = Query(
+        default=2,
+        ge=1,
+        le=6,
+        description=(
+            "Seed cases to score. Each is ~9 gateway calls (5 completions + 4 "
+            "embeddings), so this bound is a spend bound. Declared here rather than "
+            "clamped silently in the body: a caller who asks for 100 should be told the "
+            "ceiling is 6, not quietly given 6 and left believing they got 100."
+        ),
+    ),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> LiveEvalResponse:
+    """Score the seed corpus with the real Ragas metrics (admin/ai_team).
+
+    A POST and not a GET, and not memoised, because this **spends money**: every metric
+    is LLM-judged and answer relevancy also embeds. ``GET /evals/report`` stays the cheap
+    deterministic rollup a dashboard may poll; conflating them would turn a page refresh
+    into a budget event.
+
+    Every judge call goes through :func:`aegis.gateway.complete` rather than at an API
+    directly, so it is budget-checked, rate-limited, traced and written to the usage
+    ledger. That is the difference between using the library and using it honestly: an
+    evaluation subsystem whose spend the cost surface cannot see would be the one place
+    this platform's metering claim is false.
+
+    **That sentence was false for a release, and the route was the hole.** The adapters
+    do call the gateway, but this route bound no :class:`GovernanceContext`, so every
+    call ran with ``ctx=None``: no budget check, no tenant attribution, no ledger row.
+    Measured before the fix — seven invocations, ~108 model calls, ~$0.088 spent, **zero
+    rows in usage_ledger**. The claim was rendered to the reader on the evals screen and
+    in the API response while it was untrue, which is worse than not making it. The
+    binding below is the whole fix, and ``test_live_run_is_metered`` is why it cannot
+    silently come undone again.
+
+    Args:
+        limit: Seed cases to score. Small by default — each is several model calls.
+        auth: The authenticated admin/ai_team principal.
+    """
+    # Deferred like the other model-touching routes in this module, and for the same
+    # reason: `aegis.evals.libs` imports ragas, and importing it at module scope would
+    # make every consumer of this file pay for a library only this route uses.
+    from aegis.evals.libs.ragas_suite import run_ragas_suite
+    from aegis.gateway import embed as gateway_embed
+
+    from app.core.llm import complete
+
+    # The caller's tenant/user + caps, bound for the duration of the suite, exactly as
+    # the voice route does. Without this the judge calls are unattributed and free.
+    governance = await _resolve_governance(auth)
+    token = set_governance_context(governance)
+    try:
+        metrics = await run_ragas_suite(
+            complete=complete, embed=gateway_embed, limit=max(1, min(limit, 6))
+        )
+    finally:
+        reset_governance_context(token)
+    return LiveEvalResponse(
+        metrics=[
+            LiveMetricRow(
+                name=m.name, value=m.value, cases=m.cases, library=m.library, note=m.note
+            )
+            for m in metrics
+        ],
+        source="ragas, judged through the Aegis gateway (metered in usage_ledger)",
+    )
 
 
 @router.get("/evals/report", response_model=EvalsReportResponse, tags=["evals"])

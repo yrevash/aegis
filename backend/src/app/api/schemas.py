@@ -381,6 +381,101 @@ class BudgetExceeded(_BaseEvent):
     message: str = Field(description="Human-readable explanation for the UI/audit.")
 
 
+class LiveMetricRow(BaseModel):
+    """One metric computed by a real evaluation library, not by a proxy."""
+
+    name: str = Field(description="Namespaced with the library — e.g. ragas:faithfulness.")
+    value: float | None = Field(
+        default=None,
+        description=(
+            "The score in [0,1], or null when the metric could not be run. Never zero "
+            "for a metric that did not run — a zero is a measurement."
+        ),
+    )
+    cases: int = Field(description="How many cases contributed.")
+    library: str = Field(description="Library and version that produced it.")
+    note: str = Field(default="", description="Why the value is null, when it is.")
+
+
+class LiveEvalResponse(BaseModel):
+    """The result of an explicitly-triggered, LLM-judged evaluation run.
+
+    Separate from ``GET /evals/report`` on purpose: that one is deterministic, offline
+    and memoised so a dashboard can poll it. This one costs model calls, and every one
+    of them goes through the platform gateway — so the spend shows up in the usage
+    ledger like any other call rather than being invisible to the cost surface.
+    """
+
+    metrics: list[LiveMetricRow]
+    source: str = Field(description="What produced these numbers.")
+
+
+class AuditChainResponse(BaseModel):
+    """The result of walking one tenant's audit chain.
+
+    ``intact`` is a statement about the **checked** rows only. ``unchained`` counts rows
+    written before the chain existed; they carry no hash, nothing can prove anything
+    about them, and folding them into a pass would be exactly the overclaim this
+    endpoint retires.
+    """
+
+    intact: bool = Field(description="Whether every hashed row re-derived, in order.")
+    checked: int = Field(description="Rows that carried a hash and were re-derived.")
+    unchained: int = Field(
+        description="Rows predating the chain. Reported, never counted as verified."
+    )
+    broken_at: int | None = Field(
+        default=None, description="Id of the first row that did not verify."
+    )
+    detail: str = Field(description="One sentence naming what was found.")
+    head: str | None = Field(
+        default=None,
+        description=(
+            "This chain's current tip. A chain cannot detect rows removed from its END "
+            "— what remains verifies perfectly — so record this value elsewhere and "
+            "notice if it ever goes backwards. Stated as a limit rather than left as a "
+            "claim the verifier silently fails to make."
+        ),
+    )
+
+
+class Verification(_BaseEvent):
+    """One grounded check of a round's outcome, between ``act`` and ``reflect``.
+
+    The judge this replaces asked ``all(r["ok"])`` of values the *tools reported about
+    themselves*: a tool that updated the wrong record and returned success was "goal
+    met". This event carries what was checked and, in ``method``, **how** — which is the
+    part that matters. ``deterministic`` means the result rows decided it, ``read-back``
+    means a read-only call proved whether the write actually landed, and
+    ``unverifiable`` means nothing in this deployment could confirm it, which is
+    reported rather than assumed away.
+
+    ``repairable`` says whether another round could plausibly help. A guardrail refusal
+    and a call that has failed identically three times are both failures that retrying
+    cannot fix, and saying so on the wire is what stops a console implying otherwise.
+
+    Purely additive — a client that does not know this variant ignores it.
+    """
+
+    type: Literal["verification"] = "verification"
+    outcome: str = Field(
+        description=(
+            "VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED."
+        )
+    )
+    method: str = Field(
+        description="The tier that decided: deterministic, read-back or unverifiable."
+    )
+    reason: str = Field(description="One sentence naming what was checked, and the result.")
+    repairable: bool = Field(
+        description="Whether another round could plausibly change this outcome."
+    )
+    evidence: str = Field(
+        default="", description="The record read back, or the failure text. May be empty."
+    )
+    round: int = Field(default=0, description="The planning round this check follows.")
+
+
 class Reflection(_BaseEvent):
     """One self-repair reflection after an action (Reflexion-style bounded loop).
 
@@ -448,9 +543,14 @@ class AgentStatus(_BaseEvent):
     """One sub-agent's lifecycle beat in a concurrent fan-out (additive).
 
     Emitted by each lane of the multi-agent team through its own scoped writer, so a
-    fan-out produces interleaved beats from every agent running at once. ``timeout`` is
-    a **designed** terminal state, not an error: the run degrades gracefully, names the
-    omitted agent in the ``synthesis`` event, and finishes.
+    fan-out produces interleaved beats from every agent running at once. ``timeout`` and
+    ``ceiling`` are **designed** terminal states, not errors: the run degrades
+    gracefully, names the affected agent in the ``synthesis`` event, and finishes.
+
+    They are not interchangeable. ``timeout`` is a lane that ran out of wall clock with
+    nothing to show; ``ceiling`` is a lane that ran out of trajectory and whose partial
+    findings **do** reach the answer. Collapsing the two would tell a reader that a
+    truncated-but-useful lane contributed nothing.
     """
 
     type: Literal["agent_status"] = "agent_status"
@@ -459,8 +559,8 @@ class AgentStatus(_BaseEvent):
     label: str = Field(description="Human label for the agent's lane in the console.")
     status: str = Field(
         description=(
-            "queued | started | thinking | acting | done | failed | timeout — the "
-            "lane's current state."
+            "queued | started | thinking | acting | done | failed | timeout | "
+            "ceiling — the lane's current state."
         )
     )
     detail: str = Field(default="", description="Short human detail for this beat.")
@@ -532,6 +632,7 @@ StreamEvent = Annotated[
     | ProvenanceEvent
     | BudgetExceeded
     | Reflection
+    | Verification
     | MemoryEvent
     | RoutingEvent
     | AgentStatus

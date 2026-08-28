@@ -266,6 +266,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
         <DataPanel
           className="min-w-0 xl:col-span-1"
           title="Entities in view"
+          collapsible
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <InfoTip label="About Entities in view">
@@ -384,10 +385,12 @@ function GraphView({ role }: { role: Role }): ReactElement {
       )}
 
       {/* Relations — the real relation phrases between entities in view. */}
-      <Card>
-        <CardHeader
-          title="Relations"
-          actions={
+      <DataPanel
+        title="Relations"
+        collapsible
+        summary={`${view.edges.length} relation${view.edges.length === 1 ? '' : 's'}`}
+        maxHeight={420}
+        actions={
             <div className="flex flex-wrap items-center gap-2">
               <InfoTip label="About Relations">
                 The directed edges the retriever can traverse, each with its real relation phrase.
@@ -397,9 +400,8 @@ function GraphView({ role }: { role: Role }): ReactElement {
                 {view.edges.length === 1 ? 'relation' : 'relations'}
               </Badge>
             </div>
-          }
-        />
-        <CardBody>
+        }
+      >
           {view.edges.length === 0 ? (
             <SceneState name="curious" size="md" className="py-4">
               <p className="text-sm font-medium text-foreground">No relations traversed yet</p>
@@ -429,7 +431,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
                       ancestor being `overflow-x: visible`, nothing clipped it. It shrinks
                       and ellipsises now, and the full phrase is on the row's `title`. */}
                   <span
-                    className="flex min-w-0 shrink items-center gap-1 font-mono text-[0.68rem] text-blue-600"
+                    className="flex min-w-0 shrink items-center gap-1 font-mono text-[0.6875rem] text-blue-600"
                     title={e.relation}
                   >
                     <ArrowRight className="size-3 shrink-0" aria-hidden />
@@ -442,8 +444,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
               ))}
             </ul>
           )}
-        </CardBody>
-      </Card>
+      </DataPanel>
     </div>
   )
 }

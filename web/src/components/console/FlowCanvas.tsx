@@ -144,7 +144,7 @@ function StageNode({ data }: NodeProps<Node<StageData>>): ReactElement {
       >
         {data.short}
       </span>
-      <span className="tabular truncate font-mono text-[0.64rem] leading-tight text-muted-foreground">
+      <span className="tabular truncate font-mono text-[0.6875rem] leading-tight text-muted-foreground">
         {/* A stage that emits no events of its own says so, rather than being drawn as
             skipped — `recall_memory` and `persist_memory` are wired plain by design. */}
         {silent && status === 'idle'
@@ -178,7 +178,7 @@ function BranchTag({ branch, denied }: { branch: FlowResolution['branch']; denie
   if (branch === null) return null
   if (denied) {
     return (
-      <span className="rounded-md border border-block/60 bg-block/15 px-1.5 py-0.5 font-mono text-[0.62rem] tracking-wide text-block-ink">
+      <span className="rounded-md border border-block/60 bg-block/15 px-1.5 py-0.5 font-mono text-[0.6875rem] tracking-wide text-block-ink">
         action denied
       </span>
     )
@@ -186,7 +186,7 @@ function BranchTag({ branch, denied }: { branch: FlowResolution['branch']; denie
   return (
     <span
       className={cn(
-        'rounded-md border px-1.5 py-0.5 font-mono text-[0.62rem] tracking-wide',
+        'rounded-md border px-1.5 py-0.5 font-mono text-[0.6875rem] tracking-wide',
         branch === 'gated'
           ? 'border-risk/60 bg-risk/15 text-risk-ink'
           : 'border-ok/60 bg-ok/15 text-ok-ink',
@@ -200,7 +200,7 @@ function BranchTag({ branch, denied }: { branch: FlowResolution['branch']; denie
 /** What the three line treatments mean. Colour is never the only carrier. */
 function Legend(): ReactElement {
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.68rem] text-muted-foreground">
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <span aria-hidden className="h-0.5 w-4 rounded-full" style={{ backgroundColor: SIGNALS.graph.hex }} />
         traversed

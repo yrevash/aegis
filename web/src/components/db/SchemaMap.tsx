@@ -392,7 +392,7 @@ function TableNode({
           <Lock className="size-3 shrink-0 text-[color:var(--risk-ink)]" aria-hidden />
         ) : null}
       </span>
-      <span className="truncate font-mono text-[0.6rem] leading-3 text-muted-foreground">
+      <span className="truncate font-mono text-[0.6875rem] leading-3 text-muted-foreground">
         {table.tenantScoped ? 'tenant' : 'platform'} · {table.columns.length} cols ·{' '}
         {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no estimate'}
       </span>
@@ -466,7 +466,7 @@ function Unlinked({
     <section className="rounded-lg border border-dashed border-border p-3">
       <h3 className="eyebrow mb-2 flex items-center gap-1">
         No declared foreign key
-        <Figure className="text-[0.65rem]">{tables.length}</Figure>
+        <Figure className="text-[0.6875rem]">{tables.length}</Figure>
         <InfoTip label="Why these are not in the diagram">
           A relation with no key has no edge to draw and no column to place it in, so
           putting it in the map would mean inventing a position for it. They are named
@@ -477,9 +477,9 @@ function Unlinked({
         {groups.map((group) =>
           group.items.length === 0 ? null : (
             <div key={group.title} className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
+              <span className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
                 {group.title}
-                <Figure className="text-[0.65rem]">{group.items.length}</Figure>
+                <Figure className="text-[0.6875rem]">{group.items.length}</Figure>
                 <InfoTip label={`About the ${group.title.toLowerCase()} group`}>
                   {group.tip}
                 </InfoTip>
@@ -496,8 +496,8 @@ function Unlinked({
                     table.tenantScoped ? 'border-l-blue-400' : 'border-l-muted-foreground/45',
                   )}
                 >
-                  <Figure className="text-[0.68rem] text-foreground">{table.name}</Figure>
-                  <span className="font-mono text-[0.6rem] text-muted-foreground">
+                  <Figure className="text-[0.6875rem] text-foreground">{table.name}</Figure>
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
                     {table.columns.length}c
                   </span>
                   {table.withheldColumns.length > 0 ? (
@@ -593,7 +593,7 @@ function FocusView({
                   x={(x1 + x2) / 2}
                   y={(y1 + y2) / 2 - 6}
                   textAnchor="middle"
-                  className="fill-muted-foreground font-mono text-[9.5px]"
+                  className="fill-muted-foreground font-mono text-[0.6875rem]"
                 >
                   {`${relation.column} → ${relation.references}`}
                 </text>
@@ -620,7 +620,7 @@ function FocusView({
                   x={(x1 + x2) / 2}
                   y={(y1 + y2) / 2 - 6}
                   textAnchor="middle"
-                  className="fill-muted-foreground font-mono text-[9.5px]"
+                  className="fill-muted-foreground font-mono text-[0.6875rem]"
                 >
                   {`${relation.column} → ${relation.references}`}
                 </text>
@@ -716,7 +716,7 @@ function NeighbourNode({
       <Figure truncate className="text-xs font-medium text-foreground">
         {table.name}
       </Figure>
-      <span className="truncate font-mono text-[0.6rem] leading-3 text-muted-foreground">
+      <span className="truncate font-mono text-[0.6875rem] leading-3 text-muted-foreground">
         {side} · {table.tenantScoped ? 'tenant' : 'platform'} ·{' '}
         {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no estimate'}
       </span>
@@ -762,12 +762,12 @@ function Entity({ table }: { table: DbTable }): ReactElement {
             <Figure truncate className="min-w-0 flex-1 text-[0.7rem] text-foreground">
               {column.name}
             </Figure>
-            <span className="shrink-0 truncate font-mono text-[0.62rem] text-muted-foreground">
+            <span className="shrink-0 truncate font-mono text-[0.6875rem] text-muted-foreground">
               {column.dataType}
             </span>
             {column.nullable ? null : (
               <span
-                className="shrink-0 font-mono text-[0.58rem] text-muted-foreground/70"
+                className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground/70"
                 title="NOT NULL"
               >
                 nn
@@ -785,7 +785,7 @@ function Entity({ table }: { table: DbTable }): ReactElement {
             <Figure truncate className="min-w-0 flex-1 text-[0.7rem] text-[color:var(--risk-ink)]">
               {name}
             </Figure>
-            <span className="shrink-0 font-mono text-[0.62rem] text-[color:var(--risk-ink)]">
+            <span className="shrink-0 font-mono text-[0.6875rem] text-[color:var(--risk-ink)]">
               withheld
             </span>
             <InfoTip label={`Why ${name} is withheld`}>

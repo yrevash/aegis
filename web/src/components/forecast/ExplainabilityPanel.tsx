@@ -134,7 +134,7 @@ export function ExplainabilityPanel(): ReactElement {
     : null
 
   return (
-    <Card>
+    <Card collapsible>
       <CardHeader
         eyebrow="aegis.ml · the supervised spine"
         title="Model explainability"

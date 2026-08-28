@@ -45,7 +45,7 @@ function FactLine({ fact }: { fact: MemoryFactRow }): ReactElement {
         <span className="line-clamp-2 text-[0.8rem] leading-snug text-foreground">
           {fact.text}
         </span>
-        <span className="tabular mt-0.5 block font-mono text-[0.62rem] text-muted-foreground">
+        <span className="tabular mt-0.5 block font-mono text-[0.6875rem] text-muted-foreground">
           {fact.access_count}× recalled · {Math.round(fact.confidence * 100)}% confident
         </span>
       </span>
@@ -76,7 +76,7 @@ export function RecallReceipt({ memory }: { memory: MemoryEvent }): ReactElement
         <Figure className="text-blue-700">{memory.recalled_message_count}</Figure> earlier
         messages
       </p>
-      <p className="tabular font-mono text-[0.62rem] text-muted-foreground">
+      <p className="tabular font-mono text-[0.6875rem] text-muted-foreground">
         {memory.tokens_used.toLocaleString('en-US')} tokens of working memory
       </p>
     </section>

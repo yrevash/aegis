@@ -35,6 +35,7 @@ from aegis.guardrails.classifier import (
     deterministic_injection,
 )
 from aegis.guardrails.content_safety import screen_content
+from aegis.guardrails.memory_write import MemoryWriteCandidate, MemoryWriteVerdict
 from aegis.guardrails.grounding import check_citation_integrity, check_grounding
 from aegis.guardrails.media import MediaScreen, call_rail
 from aegis.guardrails.media.audio import Transcriber
@@ -954,6 +955,96 @@ class Guardrails:
                 else primary
             )
         return self._attribute_tool(result, tool_name)
+
+    async def check_memory_write(
+        self,
+        candidate: MemoryWriteCandidate,
+        *,
+        emitter: AegisEmitter | None = None,
+    ) -> MemoryWriteVerdict:
+        """Screen a candidate fact **before** it reaches the durable store.
+
+        The fourth rail stage (:attr:`~aegis.core.types.GuardStage.MEMORY_WRITE`), and
+        the one that closes a gap the other three cannot see. A poisoned fact arrives as
+        ordinary conversation, so the ``INPUT`` rail passes it — correctly, because at
+        that moment it *is* ordinary. The extractor then distils it into a durable fact,
+        and a later turn reads it back as this platform's own remembered belief, by which
+        point nothing treats it as untrusted. The turn that poisons the store and the
+        turn that is poisoned are different turns, which is why guarding both ends of one
+        turn never caught it. OWASP ASI06.
+
+        Like :meth:`check_tool_result` this is the **inbound** chain, for the same
+        reason: a candidate fact is untrusted text that a model will later read as
+        context, which is what the inbound rails exist to judge.
+
+        The rendered ``text`` is what a retriever puts in front of a model, so it is
+        screened as the primary payload. The triple is screened too — a subject or object
+        can carry an instruction just as well as a sentence can.
+
+        Args:
+            candidate: The fact on its way to the store.
+            emitter: Optional AG-UI emitter for the injection cache/media events.
+
+        Returns:
+            A :class:`MemoryWriteVerdict` carrying the rail's result **and the rewritten
+            field values**. A caller that writes the strings it passed in has not
+            redacted anything; that is why this returns the fields rather than a boolean.
+        """
+        primary, advisories = await self._screen_input(candidate.text, emitter=emitter)
+        result = (
+            advisories[0]
+            if primary.verdict is GuardVerdict.PASS and advisories
+            else primary
+        )
+        result = self._attribute_memory(result, candidate.origin)
+
+        if result.verdict is GuardVerdict.BLOCK:
+            # Nothing is written, so nothing needs rewriting. The original values are
+            # carried back only so a caller can log what it refused, never to store.
+            return MemoryWriteVerdict(
+                result=result,
+                subject=candidate.subject,
+                predicate=candidate.predicate,
+                object=candidate.object,
+                text=candidate.text,
+                redactions=tuple(result.redactions or ()),
+            )
+
+        # The triple travels through the same chain: a subject or object is read by a
+        # model exactly as a sentence is, and an injection does not care which field it
+        # arrives in.
+        parts: list[str] = []
+        for value in (candidate.subject, candidate.predicate, candidate.object):
+            if not value:
+                parts.append(value)
+                continue
+            field_primary, _ = await self._screen_input(value, emitter=emitter)
+            parts.append(
+                field_primary.text
+                if field_primary.verdict is GuardVerdict.REDACT and field_primary.text
+                else value
+            )
+
+        return MemoryWriteVerdict(
+            result=result,
+            subject=parts[0],
+            predicate=parts[1],
+            object=parts[2],
+            text=result.text if result.text else candidate.text,
+            redactions=tuple(result.redactions or ()),
+        )
+
+    @staticmethod
+    def _attribute_memory(result: GuardResult, origin: str) -> GuardResult:
+        """Name the origin in the rationale so a refusal is never anonymous.
+
+        A refused write is attributable to the same actor a successful one is —
+        ``consolidation`` or ``operator:<username>`` — which is what makes the write log
+        readable as one sequence rather than two.
+        """
+        if not origin:
+            return result
+        return result.model_copy(update={"reason": f"[memory:{origin}] {result.reason}"})
 
     @staticmethod
     def _attribute_tool(result: GuardResult, tool_name: str | None) -> GuardResult:

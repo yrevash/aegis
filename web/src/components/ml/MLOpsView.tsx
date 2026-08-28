@@ -392,6 +392,7 @@ function MLOpsView(): ReactElement {
             className="min-w-0"
             eyebrow="aegis.ml"
             title="Ensemble members"
+            collapsible
             actions={
               source ? (
                 <Badge tone={source.tone} className="gap-1.5">
@@ -509,7 +510,7 @@ function MLOpsView(): ReactElement {
               <span
                 key={k}
                 translate="no"
-                className="tabular inline-flex items-center gap-1 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground"
+                className="tabular inline-flex items-center gap-1 rounded-md bg-surface-2 px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground"
               >
                 <span className="text-foreground">{k}</span>
                 <span>=</span>

@@ -76,13 +76,13 @@ export function CapabilityMap({
             <span className="flex min-w-0 flex-col leading-tight">
               <span className="t-label truncate text-foreground">{item.name}</span>
               {item.tech && (
-                <span className="truncate font-mono text-[0.62rem] text-muted-foreground/80">
+                <span className="truncate font-mono text-[0.6875rem] text-muted-foreground/80">
                   {item.tech}
                 </span>
               )}
             </span>
             <span
-              className="eyebrow ml-auto shrink-0 text-[0.56rem]"
+              className="eyebrow ml-auto shrink-0 text-[0.6875rem]"
               style={{ color: s.hex }}
             >
               {s.label}

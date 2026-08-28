@@ -68,11 +68,12 @@ A turn becomes a streamed answer: guardrails, a supervisor route, retrieval, pla
 | 10 | `gate` | `aegis.agent.graph` | Decide on **tool risk** whether the proposed calls need a human. This is the only branch into approval, and the console's map is checked against that fact by GET /agent/topology. | nothing observable |
 | 11 | `approval` *(conditional)* | `aegis.agent.approvals` | Pause the run until a human decides, enumerating every call that will execute. The node itself emits nothing: it re-executes on resume, so the orchestrator emits approval_required from the interrupt value exactly once instead. | `stream` `approval_required` — emitted by the orchestrator, not the node<br>`stream` `approval_queued` — when the run is parked to a durable inbox |
 | 12 | `act` | `aegis.agent.graph` | Execute exactly the calls the gate — or the human — admitted. | `stream` `tool_call` — the call, its arguments and its risk tier<br>`stream` `tool_result` — whether it succeeded, and a summary |
-| 13 | `reflect` | `aegis.agent.graph` | Judge the draft and loop back once when it does not hold up. | `stream` `reflection` — the verdict and what it sent back |
-| 14 | `generate` | `aegis.agent.graph` | Produce the answer text. The gateway call is deliberately non-streaming; the pacing happens in the stream stage below. | nothing observable |
-| 15 | `guard_output` | `aegis.agent.rails` | Screen the answer before a single token reaches the browser. | `stream` `guardrail` — the rail verdict and any redactions |
-| 16 | `stream` | `aegis.agent.graph` | Pace the already-produced answer out as tokens. | `stream` `token` — one chunk of the answer |
-| 17 | `persist_memory` | `aegis.memory` | Write the turn to long-term memory. Wired plain, like recall_memory, so an inactive memory emits nothing. The tail of every completed run. | nothing observable |
+| 13 | `verify` | `aegis.agent.graph` | Check what actually happened against something outside the model: the result rows, or the record read back. | `stream` `verification` — what was checked, how, and whether it held |
+| 14 | `reflect` | `aegis.agent.graph` | Judge the draft and loop back once when it does not hold up. | `stream` `reflection` — the verdict and what it sent back |
+| 15 | `generate` | `aegis.agent.graph` | Produce the answer text. The gateway call is deliberately non-streaming; the pacing happens in the stream stage below. | nothing observable |
+| 16 | `guard_output` | `aegis.agent.rails` | Screen the answer before a single token reaches the browser. | `stream` `guardrail` — the rail verdict and any redactions |
+| 17 | `stream` | `aegis.agent.graph` | Pace the already-produced answer out as tokens. | `stream` `token` — one chunk of the answer |
+| 18 | `persist_memory` | `aegis.memory` | Write the turn to long-term memory. Wired plain, like recall_memory, so an inactive memory emits nothing. The tail of every completed run. | nothing observable |
 
 **What this pipeline does not record**
 

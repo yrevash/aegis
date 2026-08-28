@@ -16,7 +16,7 @@ tool's own declared risk, is the whole gating rule — there is no second signal
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -43,6 +43,8 @@ __all__ = [
     "OutputGuardFn",
     "RenderPromptFn",
     "RetrieveFn",
+    "ReadBack",
+    "ReadBackFn",
     "ReadOnlyFn",
     "RiskFn",
     "RosterFn",
@@ -165,6 +167,39 @@ RiskFn = Callable[[str], RiskLevel]
 #: Whether a tool only reads. Defaults to "no tool is read-only", which preserves the
 #: exact behaviour every existing caller and test fake had before this seam existed.
 ReadOnlyFn = Callable[[str], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class ReadBack:
+    """The read-only call that proves whether a write actually landed.
+
+    This is what makes the repair loop a *verifier* rather than a self-critique. A model
+    asked "did that go well?" about its own work is the failure mode the 2026 literature
+    is clearest on — ungrounded self-correction does not reliably help and often degrades.
+    Reading the record back is grounded in something outside the model, and it is also the
+    difference between a demo that is real and one that is a scripted animation.
+
+    Attributes:
+        tool: The read-only tool to call. Must be read-only AND below the gate threshold,
+            so verification can never itself become an action or raise an approval.
+        args: Arguments for that call.
+        expect: A substring the read-back summary must contain for the write to count as
+            landed. Deliberately a substring rather than a predicate — it has to be
+            serialisable into the verification event a reader will see.
+        describe: One human sentence naming what was checked, for that event.
+    """
+
+    tool: str
+    args: dict[str, Any]
+    expect: str
+    describe: str
+
+
+#: Given a write that just executed, the read-only call that proves whether it landed.
+#: ``None`` — the default, and what every existing test fake will return — means tier 2
+#: is INCONCLUSIVE and the verifier falls through to its judge. It never means the write
+#: is assumed to have worked; an unverifiable write is reported as unverified.
+ReadBackFn = Callable[[str, Mapping[str, Any]], "ReadBack | None"]
 
 
 class RenderPromptFn(Protocol):
@@ -355,7 +390,28 @@ class AgentConfig:
 
     gate_min_risk: RiskLevel = RiskLevel.HIGH
     stream_chunk_words: int = 4
-    max_plan_iterations: int = 2
+    max_plan_iterations: int = 4
+    #: Hard ceiling on the tokens one sub-agent lane's trajectory may reach before its
+    #: next model call, estimated over the whole ``messages`` list.
+    #:
+    #: Aegis has no trajectory compaction: nothing summarises or evicts a run's own turn
+    #: history. Its memory subsystem is excellent and governs *the store across turns* —
+    #: it never sees what one run accumulates. Until compaction exists, the honest answer
+    #: to "what happens on a very long run" is a stated bound rather than a shrug.
+    #:
+    #: **36000, chosen as roughly 3x the observed peak.** Measured 2026-08-27 on this
+    #: deployment across two fan-out runs: peak 11,859 tokens per lane. That is TWO
+    #: SAMPLES, which is thin, and the number should be revisited against a real
+    #: workload rather than trusted as calibrated. Recording the sample size here is the
+    #: point — a ceiling whose provenance is unwritten becomes folklore.
+    max_trajectory_tokens: int = 36000
+    #: Hard ceiling on ONE tool result's contribution to a lane's trajectory. A longer
+    #: summary is truncated with an explicit marker before it is appended; the full text
+    #: stays on the result record, so the model loses the tail and the audit does not.
+    #:
+    #: This is the bound that actually bites first in practice: a run's real exposure is
+    #: one unbounded tool result, not a long conversation.
+    max_tool_result_tokens: int = 4000
     self_repair_enabled: bool = True
     approval_park_timeout: float | None = None
     default_persona_id: str = "default"
@@ -402,6 +458,8 @@ class AgentConfig:
             "gate_min_risk": self.gate_min_risk.value,
             "stream_chunk_words": self.stream_chunk_words,
             "max_plan_iterations": self.max_plan_iterations,
+            "max_trajectory_tokens": self.max_trajectory_tokens,
+            "max_tool_result_tokens": self.max_tool_result_tokens,
             "self_repair_enabled": self.self_repair_enabled,
             "approval_park_timeout": self.approval_park_timeout,
             "default_persona_id": self.default_persona_id,
@@ -491,6 +549,9 @@ class AgentDeps:
     #: exactly the behaviour every caller had before this seam existed, so no existing
     #: construction or test fake changes meaning. The host wires the real registry here.
     tool_read_only: ReadOnlyFn = field(default=lambda _name: False)
+    #: How to prove a write landed. Defaults to "no write can be read back", which makes
+    #: the verifier fall through to its judge rather than assume success.
+    read_back_for: ReadBackFn = field(default=lambda _name, _args: None)
     #: Supervisor roster provider — returns the host adapter's routable specialists.
     #: Defaults to the core ``qa``-only fallback roster, so test fakes that omit it
     #: still route (to ``qa``); the host wires the real adapter roster here.

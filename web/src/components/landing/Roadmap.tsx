@@ -31,7 +31,7 @@ import { LandingSection } from './LandingSection'
  * emission order. The shipped column had been reading in the muted grey of the
  * unshipped one, which is the single distinction this section exists to make.
  */
-const COLUMN_HEAD = 'font-mono text-[0.68rem] font-medium tracking-[0.16em] uppercase'
+const COLUMN_HEAD = 'font-mono text-[0.6875rem] font-medium tracking-[0.16em] uppercase'
 
 const RUNNING = [
   'Multi-tenant RLS, budgets and an append-only audit log',

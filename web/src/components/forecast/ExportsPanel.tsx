@@ -125,7 +125,7 @@ export function ExportsPanel({
                 <InfoTip label={`What ${row.title} holds`}>{row.contents}</InfoTip>
               </p>
               <p className="text-[0.78rem] leading-5 text-muted-foreground">{row.summary}</p>
-              <p className="tabular truncate font-mono text-[0.68rem] text-muted-foreground">
+              <p className="tabular truncate font-mono text-[0.6875rem] text-muted-foreground">
                 GET {reportDownloadPath(row.id, row.id === 'forecast' ? forecastFilters : {})}
               </p>
             </div>

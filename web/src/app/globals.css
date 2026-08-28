@@ -162,8 +162,19 @@
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
 
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Space Grotesk', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* IBM Plex Sans is a superfamily: the display voice comes from weight and tracking,
+     not from a second face, so `--font-display` is the same family as `--font-sans`.
+     The token stays rather than being deleted — 11 `font-display` call sites plus
+     `.t-hero`/`.t-metric`/`.t-title` read it, and keeping it leaves one lever to
+     reintroduce a distinct display face later without touching a call site.
+
+     `--font-mono` is deliberately unchanged. JetBrains Mono and IBM Plex Mono have an
+     identical 0.6000em advance, so column alignment is the same either way — but Plex
+     Mono's x-height is 6.2% smaller, and mono carries every numeral, id, cost and
+     timestamp in the product through `Figure`, at 11.52px and 10.88px. Family coherence
+     is not worth that trade across 324 call sites. */
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
 
   --color-background: var(--background);
@@ -293,7 +304,7 @@
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.16em;
-    font-size: 0.68rem;
+    font-size: 0.6875rem; /* 11px — the functional-text floor, see tests/design/textFloor */
     font-weight: 500;
     color: var(--eyebrow-ink, var(--muted-foreground));
   }
@@ -420,17 +431,50 @@
     animation: trace-in 0.28s ease-out both;
   }
 
-  /* Idle graph scanline sweep. */
-  @keyframes scanline {
+  /* The signature mark's screening rotation — it carries DURATION, never progress, and
+   * it exists only while a guardrail stage is open, so it is not an ambient loop. */
+  @keyframes mark-spin {
     from {
-      transform: translateY(-100%);
+      transform: rotate(0deg);
     }
     to {
-      transform: translateY(100%);
+      transform: rotate(360deg);
     }
   }
-  .animate-scan {
-    animation: scanline 2.4s linear infinite;
+  .animate-mark-spin {
+    animation: mark-spin 2.4s linear infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The mark's core — one pulse per wire event, re-keyed on `beat.seq`. */
+  @keyframes mark-core {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.12);
+    }
+  }
+  .animate-mark-core {
+    animation: mark-core 0.9s ease-out;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The mark's idle draw-on: once, on mount. Deliberately not infinite — §6 bans
+   * ambient loops on an operator screen, and an idle console is all operator screen. */
+  @keyframes mark-draw {
+    from {
+      stroke-dasharray: 0 24;
+    }
+    to {
+      stroke-dasharray: 24 0;
+    }
+  }
+  .animate-mark-draw {
+    animation: mark-draw 0.32s ease-out both;
   }
 
   /* Active-beat — one synchronized same-hue pulse fired on every stream event.
@@ -450,6 +494,138 @@
     animation: active-beat 0.9s ease-out;
   }
 
+  /*
+   * The open beat, breathing.
+   *
+   * `animate-beat` above is one-shot: it fires per wire event, which is right when
+   * events keep coming and wrong for the stage that emits nothing at all between its
+   * open and its close. Agentic retrieval is that stage, and it is the longest one.
+   *
+   * This loops, and §6's ban on ambient loops is not in play: it is bound to a stage
+   * the wire says is open and stops the moment the beat lands, so it reports a fact
+   * rather than decorating an idle screen. It carries duration, never progress.
+   */
+  /*
+   * A probe landing on the firing line.
+   *
+   * The mark grows from the rail to its measured height the moment its verdict frame
+   * arrives, so a reader watching the line sees *when* each answer came back rather
+   * than finding twelve marks already drawn. It is one-shot per mark - each `<g>`
+   * mounts once, when its verdict lands - so nothing loops and the finished chart is
+   * still. The height it grows to is the wire's own `total`; the motion carries
+   * arrival, never magnitude.
+   *
+   * `transform-box: fill-box` is required: the chart is drawn under
+   * `preserveAspectRatio="none"`, and without it the origin is the whole viewport and
+   * the mark shears sideways as it grows.
+   */
+  /*
+   * M1 "Arrive" — the pre-paint hidden state.
+   *
+   * This lives in CSS rather than in the component because JavaScript cannot beat the
+   * first paint of server-rendered HTML: setting opacity 0 from a layout effect gives
+   * content → blank → content, measured at 284ms normally and 1705ms under 6x CPU
+   * throttle. Same problem and same fix as the text-scale boot script.
+   *
+   * `.js` is added synchronously in <head> by ARRIVE_BOOT. Without JavaScript the class
+   * never lands, this rule never matches, and every child renders normally — an
+   * entrance animation must never be able to blank the page for somebody whose script
+   * failed to load.
+   */
+  .js [data-arrive] > * {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Nothing to arrive from: reduced motion means the content is simply there. */
+    .js [data-arrive] > * {
+      opacity: 1;
+    }
+  }
+
+  @keyframes probe-land {
+    from {
+      transform: scaleY(0);
+      opacity: 0.35;
+    }
+    to {
+      transform: scaleY(1);
+      opacity: 1;
+    }
+  }
+  .animate-probe-land {
+    animation: probe-land 0.32s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    transform-box: fill-box;
+    transform-origin: bottom;
+  }
+
+  /* The cap flashes once on arrival - the impact, not a status light. */
+  @keyframes probe-impact {
+    0% {
+      opacity: 0;
+      transform: scaleX(0.2);
+    }
+    45% {
+      opacity: 0.9;
+      transform: scaleX(1.4);
+    }
+    100% {
+      opacity: 0;
+      transform: scaleX(1.4);
+    }
+  }
+  .animate-probe-impact {
+    animation: probe-impact 0.5s ease-out forwards;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* Where the next probe will land, while the line is still firing. */
+  @keyframes probe-next {
+    0%,
+    100% {
+      opacity: 0.14;
+    }
+    50% {
+      opacity: 0.48;
+    }
+  }
+  .animate-probe-next {
+    animation: probe-next 1.1s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-probe-land,
+    .animate-probe-next {
+      animation: none;
+    }
+    .animate-probe-impact {
+      animation: none;
+      opacity: 0;
+    }
+  }
+
+  @keyframes beat-open {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.86);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .animate-beat-open {
+    animation: beat-open 1.8s ease-in-out infinite;
+    transform-origin: center;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-beat-open {
+      animation: none;
+      opacity: 1;
+    }
+  }
+
   /* Graph halo — SVG-safe (scales around its own centre). */
   @keyframes flow-pulse {
     0% {
@@ -465,22 +641,6 @@
     animation: flow-pulse 1s ease-out;
     transform-box: fill-box;
     transform-origin: center;
-  }
-
-  /* Idle attract-loop — gentle breathing for dormant panels before a run. */
-  @keyframes idle-breathe {
-    0%,
-    100% {
-      opacity: 0.6;
-      transform: scale(0.996);
-    }
-    50% {
-      opacity: 1;
-      transform: scale(1.004);
-    }
-  }
-  .animate-idle-breathe {
-    animation: idle-breathe 4.5s ease-in-out infinite;
   }
 
   /* Idle trust-bar shimmer — a slow highlight sweep across the dormant bar. */

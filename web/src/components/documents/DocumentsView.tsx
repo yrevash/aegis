@@ -310,7 +310,7 @@ function CorpusMakeup({ shape, marks }: { shape: CorpusShape; marks: CorpusMarks
           data={slices(marks.status)}
           centerLabel={String(shape.total)}
           centerSub="documents"
-          height={172}
+          height={140}
         />
         <p className="flex flex-wrap items-center gap-1.5">
           {marks.status.length === 0 ? null : <span className="eyebrow mr-1">types</span>}
@@ -540,10 +540,19 @@ export function DocumentsView({ token }: { token: string | null }): ReactElement
             section exists. `[&>*]:min-w-0` for the same reason as the pipeline
             grid: below `lg` this is one auto-sized track, and a grid item's
             default `min-width: auto` let the upload form set it 6px wider than
-            the 390px viewport. `items-start` so a short makeup card does not
-            stretch to the upload form's height.
+            the 390px viewport.
+
+            `items-stretch`, not `items-start`. The original note here said a
+            short makeup card must not stretch to the upload form's height — but
+            which card is taller is a fact about the *data*, not the layout, and
+            on a corpus with several statuses and a type list the makeup card is
+            the taller one. `items-start` then left the upload card ending some
+            150px above its neighbour, and the row read as a card with a hole
+            punched beside it rather than as two panels. Stretching makes the two
+            the same height whichever way the data falls, which is the property
+            actually wanted.
           */}
-          <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] [&>*]:min-w-0">
+          <div className="grid min-w-0 items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] [&>*]:min-w-0">
             <UploadPanel token={token} onUploaded={refresh} />
             <CorpusMakeup shape={shape} marks={marks} />
           </div>

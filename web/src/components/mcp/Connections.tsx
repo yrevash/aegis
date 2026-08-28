@@ -437,7 +437,7 @@ function PeerCard({
             <Network className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <span className="truncate text-sm font-medium text-foreground">{server.label}</span>
           </span>
-          <p className="mt-0.5 truncate font-mono text-[0.68rem] text-muted-foreground">
+          <p className="mt-0.5 truncate font-mono text-[0.6875rem] text-muted-foreground">
             {server.url || 'in-process'}
           </p>
         </div>
@@ -453,7 +453,7 @@ function PeerCard({
         {identity ? (
           <>
             {' — '}
-            <Figure className="text-[0.68rem] text-foreground">{identity}</Figure>
+            <Figure className="text-[0.6875rem] text-foreground">{identity}</Figure>
           </>
         ) : null}
       </p>
@@ -489,7 +489,7 @@ function PeerCard({
         >
           <span className="block h-full bg-blue-600" style={{ width: `${share}%` }} />
         </div>
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.68rem] text-muted-foreground">
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-muted-foreground">
           <span>
             {server.grantedTools} of {server.discoveredTools} tools callable
           </span>
@@ -497,7 +497,7 @@ function PeerCard({
             <span className="inline-flex items-center gap-1">
               <KeyRound className="size-3 text-ok-ink" aria-hidden />
               credential
-              <Figure className="text-[0.68rem]">{server.credentialFingerprint}</Figure>
+              <Figure className="text-[0.6875rem]">{server.credentialFingerprint}</Figure>
               {server.credentialSetBy ? <>set by {server.credentialSetBy}</> : null}
             </span>
           ) : (
@@ -538,7 +538,7 @@ function PeerCard({
               {probe.tools.map((tool) => (
                 <li
                   key={tool}
-                  className="tabular rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[0.68rem] text-foreground"
+                  className="tabular rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[0.6875rem] text-foreground"
                 >
                   {tool}
                 </li>
@@ -618,13 +618,13 @@ function Fact({
 }): ReactElement {
   return (
     <div className={cn('min-w-0 bg-card px-2.5 py-2', className)}>
-      <dt className="flex items-center gap-1 text-[0.68rem] text-muted-foreground">
+      <dt className="flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
         {label}
         <InfoTip label={`About ${label}`}>{tip}</InfoTip>
       </dt>
       <dd className="mt-0.5 truncate">
         {mono ? (
-          <Figure className="text-[0.68rem] text-foreground">{value}</Figure>
+          <Figure className="text-[0.6875rem] text-foreground">{value}</Figure>
         ) : (
           <Figure className="text-foreground">{value}</Figure>
         )}

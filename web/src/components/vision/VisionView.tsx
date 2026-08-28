@@ -280,7 +280,7 @@ function VisionView(): ReactElement {
               title="Image"
               actions={
                 image != null ? (
-                  <Badge tone="neutral" className="font-mono text-[0.66rem]">
+                  <Badge tone="neutral" className="font-mono text-[0.6875rem]">
                     {COUNT.format(image.width)}×{COUNT.format(image.height)} · {bytes(image.bytes)}
                   </Badge>
                 ) : null
@@ -505,7 +505,7 @@ function VisionView(): ReactElement {
                     <p className="mt-4 flex flex-wrap items-center gap-1.5 text-[0.72rem] text-muted-foreground">
                       <span>redacted before the model saw it:</span>
                       {analysis.pii_entities.map((kind) => (
-                        <Badge key={kind} tone="ml" className="font-mono text-[0.66rem]">
+                        <Badge key={kind} tone="ml" className="font-mono text-[0.6875rem]">
                           {kind}
                         </Badge>
                       ))}

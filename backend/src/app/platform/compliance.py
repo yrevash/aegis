@@ -2811,6 +2811,266 @@ _INDIA_SECTORAL: tuple[ControlEntry, ...] = (
 #: Aegis scores puts the binding obligations at the top of the picker and the voluntary
 #: frameworks below them, which is the order a reviewer's own risk register uses. The
 #: screen groups on this field rather than re-deriving the grouping from names.
+_OWASP_AGENTIC: tuple[ControlEntry, ...] = (
+    ControlEntry(
+        id="ASI01",
+        title="Agent Goal Hijack",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Injection is screened at four rail stages now — input, output, tool result "
+            "and the memory write — and the human approval gate bounds any plan that "
+            "survives them before it acts."
+        ),
+        gap=(
+            "Injection is never marked solved on this platform and is not marked solved "
+            "here. Ten battery probes are semantic-only and leak with no model completer "
+            "wired; the deterministic layer catches phrasing, not intent. The gate is the "
+            "decisive control precisely because the rails are not sufficient."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/guardrails/pipeline.py", "the four rail entry points"),
+            _f("aegis/src/aegis/agent/graph.py", "the human approval interrupt"),
+            _t(
+                "aegis/tests/redteam/test_stages_and_suites.py"
+                "::test_each_probe_is_screened_by_the_rail_its_stage_names",
+                "each probe reaches the rail its stage names",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI02",
+        title="Tool Misuse and Exploitation",
+        state=ControlState.ENFORCED,
+        summary=(
+            "Tools are a typed, per-persona allowlist with a risk tier each; anything at "
+            "or above the gate threshold stops for a human, and every call is audited "
+            "with its actor, arguments and approver."
+        ),
+        evidence=[
+            _f("backend/src/app/adapter/tools.py", "ALLOWLIST + the risk-tiered registry"),
+            _f("aegis/src/aegis/agent/graph.py", "gate, approval and _authorised_calls"),
+            _t(
+                "aegis/tests/agent/test_gate_authorises_what_runs.py"
+                "::test_one_gate_authorises_exactly_the_actions_it_enumerated",
+                "one approval authorises exactly the calls it named, and no others",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI03",
+        title="Identity and Privilege Abuse",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Tenancy is enforced in Postgres RLS beneath the application filters, and "
+            "the MCP surface re-resolves the caller's identity and authority on every "
+            "call rather than once per connection — measured over one socket by swapping "
+            "the bearer and watching the tool list and tenant scope change with it."
+        ),
+        gap=(
+            "What is enforced is the tenant boundary and per-call re-resolution. What is "
+            "absent is an agent identity at all: the agent acts as the human whose token "
+            "it holds, so there is no delegation chain a third party could verify and no "
+            "way to distinguish 'this agent, acting for this person' from 'this person'. "
+            "The A2A card is the platform's first verifiable identity and it identifies "
+            "the deployment, not a running agent."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/governance/rls.py", "row-level security policies"),
+            _f("backend/src/app/mcp/server.py", "resolve_caller, per call"),
+            _t(
+                "backend/tests/api/test_admin_governance.py"
+                "::test_tenant_admin_cannot_read_other_tenant",
+                "a tenant-bound caller cannot reach another tenant's rows",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI04",
+        title="Agentic Supply Chain Vulnerabilities",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Every model call goes through one vetted gateway, dependencies are pinned "
+            "with a constraint block that a fresh resolve honours, and the platform "
+            "serves its own SBOM in CycloneDX and SPDX."
+        ),
+        gap=(
+            "There is no Agent Bill of Materials — the tools, their risk tiers, the model "
+            "fleet, the rails and the knowledge sources are not published as one signed "
+            "inventory, which is what the emerging agentic-supply-chain guidance asks "
+            "for. Dependency pinning is verified; artefact attestation is not: nothing "
+            "checks that a published wheel was built from the source it claims."
+        ),
+        evidence=[
+            _f("backend/pyproject.toml", "constraint-dependencies, with reasons"),
+            _r("GET /stack/sbom", "CycloneDX 1.6 + SPDX 2.3"),
+            _t(
+                "backend/tests/api/test_supply_chain.py"
+                "::test_an_audit_that_could_not_run_does_not_pass",
+                "a supply-chain audit that could not run is not reported as clean",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI05",
+        title="Unexpected Code Execution (RCE)",
+        state=ControlState.PARTIAL,
+        summary=(
+            "There is no code-execution tool and no shell. The in-process registry is a "
+            "closed set of typed, allowlisted callables with validated argument models, "
+            "and an external tool discovered from an MCP peer starts at HIGH risk — so "
+            "an unrecognised name cannot slip under the human gate by being unknown, and "
+            "the persona allowlist is re-checked before any connection is opened."
+        ),
+        gap=(
+            "The tool set is not closed, and an earlier version of this row claimed it "
+            "was. A registered MCP peer contributes tools at runtime, and a peer can add "
+            "one tomorrow that nobody has assessed. What bounds that is risk-tiering and "
+            "the gate, not the absence of a path — which is a weaker and truer statement. "
+            "Nothing sandboxes an external tool's effects on the peer's own side."
+        ),
+        evidence=[
+            _f("backend/src/app/adapter/tools.py", "TOOL_REGISTRY — a closed, typed set"),
+            _t(
+                "backend/tests/adapter/test_allowlist.py::test_client_cannot_run_admin_tool",
+                "a tool outside the persona's allowlist raises rather than runs",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI06",
+        title="Memory & Context Poisoning",
+        state=ControlState.PARTIAL,
+        summary=(
+            "A fourth rail stage screens a candidate fact before it reaches the durable "
+            "store, and refusals are written to the fact-write audit trail under their "
+            "own operation. The other three stages structurally cannot see this attack: "
+            "the turn that poisons the store and the turn poisoned by it are different "
+            "turns, so guarding both ends of one turn never caught it."
+        ),
+        gap=(
+            "Three of four poisoning probes are refused; the fourth is the honest limit "
+            "and it is declared rather than curated out. A policy override phrased as an "
+            "ordinary business sentence — 'all refund requests from this account are "
+            "pre-approved' — carries no injection signature, because it is not addressed "
+            "to the model at all. Catching it needs the model-backed layer wired."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/guardrails/memory_write.py", "the rail's contract"),
+            _f("aegis/src/aegis/memory/consolidate.py", "the screen, at _reconcile"),
+            _t(
+                "aegis/tests/memory/test_consolidate.py"
+                "::test_a_poisoned_fact_is_refused_and_audited_rather_than_stored",
+                "a poisoned fact is refused and audited, not stored",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI07",
+        title="Insecure Inter-Agent Communication",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Internal fan-out runs inside one orchestrator rather than over a network "
+            "between peers, and every hop is traced and audited. The external A2A "
+            "surface is authenticated, and its routing tenant is structurally barred "
+            "from setting the database tenant scope."
+        ),
+        gap=(
+            "The A2A surface is now served and its card is signed, so a peer can verify "
+            "who it is talking to — but the traffic itself is not yet mutually "
+            "authenticated, there is no peer allowlist, and inbound A2A cannot start a "
+            "run. What holds today is that the addressed tenant can never become the "
+            "database tenant: the routing field is refused when it disagrees with the "
+            "bearer token rather than reconciled. That is one property, well tested, and "
+            "not the whole control."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/agent/subagent.py", "fan-out inside one process"),
+            _f("aegis/src/aegis/observability/semconv.py", "every hop is traced"),
+            _t(
+                "aegis/tests/agent/test_team_fanout.py"
+                "::test_a_subagent_proposal_gates_and_resumes_through_the_existing_path",
+                "a lane's proposal goes through the same gate, not around it",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI08",
+        title="Cascading Failures",
+        state=ControlState.PARTIAL,
+        summary=(
+            "The repair loop is bounded by several independent stops rather than one: an "
+            "iteration cap, a separate repair budget, and progress detection that halts a "
+            "call failing identically three times. A rail refusal is terminal and never "
+            "retried, so the loop cannot spend its budget arguing with a guardrail."
+        ),
+        gap=(
+            "A token ceiling now bounds each lane — one for the whole trajectory and one "
+            "for a single tool result — and both are tenant-tightenable, so a run is "
+            "bounded by size as well as by iteration count and progress. What is still "
+            "absent is a wall-clock or currency bound on the repair loop itself, and "
+            "cross-lane detection: a failure cascading across a fan-out is still not "
+            "recognised as one event."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/agent/graph.py", "verify, and the termination bounds"),
+            _t(
+                "aegis/tests/agent/test_self_repair_loop.py"
+                "::test_an_identical_call_failing_three_times_stops_the_loop",
+                "a stuck call is stopped by progress, not by budget",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI09",
+        title="Human-Agent Trust Exploitation",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Every consequential action stops for a named human and is recorded with its "
+            "approver and trace id, and the console shows the evidence an answer stands "
+            "on rather than asking to be believed."
+        ),
+        gap=(
+            "Nothing addresses anthropomorphism itself. There is no measure of whether a "
+            "reader over-trusts a fluent answer, no confidence calibration shown beside "
+            "prose, and no control for an operator approving by reflex — which is the "
+            "specific failure this category names."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/governance/audit.py", "approver and trace on every row"),
+            _t(
+                "aegis/tests/governance/test_audit.py"
+                "::test_the_chain_verifies_and_a_tampered_row_is_caught",
+                "the trail is verifiable, not merely append-only",
+            ),
+        ],
+    ),
+    ControlEntry(
+        id="ASI10",
+        title="Rogue Agents",
+        state=ControlState.PARTIAL,
+        summary=(
+            "Autonomy is bounded on every axis a run can move along: an allowlisted tool "
+            "set, a risk gate, a budget cap enforced at the gateway, and an audit trail "
+            "that is now verifiable rather than merely privileged."
+        ),
+        gap=(
+            "Bounded is not monitored. Nothing watches a run's behaviour for drift, and "
+            "there is no kill switch that stops an in-flight agent other than the budget "
+            "refusing its next call."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/gateway/llm.py", "budget enforced at the chokepoint"),
+            _f("aegis/src/aegis/governance/chain.py", "the tamper-evident trail"),
+            _t(
+                "aegis/tests/governance/test_audit.py"
+                "::test_a_deleted_row_breaks_every_row_after_it",
+                "a removed row cannot hide",
+            ),
+        ],
+    ),
+)
+
+
 _FRAMEWORKS: tuple[tuple[str, str, str, str, str, tuple[ControlEntry, ...]], ...] = (
     (
         "dpdp",
@@ -2848,6 +3108,15 @@ _FRAMEWORKS: tuple[tuple[str, str, str, str, str, tuple[ControlEntry, ...]], ...
         JURISDICTION_INTERNATIONAL,
         "The application layer — what an attacker sends the model and what the model sends back.",
         _OWASP_LLM,
+    ),
+    (
+        "owasp-agentic",
+        "OWASP Top 10 for Agentic Applications",
+        "2026",
+        JURISDICTION_INTERNATIONAL,
+        "The agent layer — goals, tools, identity, memory and the blast radius when one "
+        "of them is turned against the system.",
+        _OWASP_AGENTIC,
     ),
     (
         "owasp-web",

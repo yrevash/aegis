@@ -22,6 +22,7 @@ import type {
   NodeStarted,
   Provenance,
   Reflection,
+  Verification,
   RoutingEvent,
   ScoredSource,
   StreamEvent,
@@ -94,6 +95,14 @@ export interface RunState {
    * agent visibly correcting itself, which no other event in the protocol shows.
    */
   reflections: Reflection[]
+  /**
+   * Every grounded check this run made, in order.
+   *
+   * Accumulated rather than replaced because the thing worth showing is the sequence:
+   * the write failed, the record was read back and disagreed, the corrected write
+   * landed and the record agreed. A single latest verdict cannot tell that story.
+   */
+  verifications: Verification[]
   /**
    * The supervisor's routing decision for this run, or null on a run that never
    * routed. Carries `decided_by`, so the trace can always name whether the
@@ -172,6 +181,7 @@ export const initialRunState: RunState = {
   toolCalls: [],
   toolResults: [],
   reflections: [],
+  verifications: [],
   routing: null,
   memory: null,
   agentStatuses: [],
@@ -238,6 +248,7 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
         provenance: null,
         budgetExceeded: null,
         reflections: [],
+        verifications: [],
         routing: null,
         memory: null,
         agentStatuses: [],
@@ -301,6 +312,17 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
         ...next,
         phase: 'streaming',
         reflections: [...state.reflections, event],
+      }
+
+    case 'verification':
+      // Accumulated, not replaced: the demo is the SEQUENCE — it tried, the record
+      // disagreed, it tried again and the record agreed. One latest verdict cannot
+      // show that. This branch exists because the `default` case silently discards
+      // what it does not recognise, which is how `reflection` stayed invisible.
+      return {
+        ...next,
+        phase: 'streaming',
+        verifications: [...state.verifications, event],
       }
 
     case 'routing':

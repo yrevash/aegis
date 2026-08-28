@@ -14,8 +14,13 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { DataPanel } from '@/components/ui/DataPanel'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
-import { getEvalsReport } from '@/lib/api/client'
+import { getEvalsReport,
+  LIVE_EVAL_CASES,
+} from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { runLiveEvals } from '@/lib/api/client'
+import { errorSentence } from '@/lib/api/apiError'
+import type { LiveEvalResponse } from '@/lib/api/types'
 import type { EvalCaseResult, EvalMetricConfig, EvalsReportResponse } from '@/lib/api/platform'
 import { cn } from '@/lib/utils'
 
@@ -206,7 +211,7 @@ function CaseMatrix({
               </span>
               {bar ? (
                 <span className="mt-0.5 block font-normal normal-case">
-                  <Figure className="text-[0.68rem] leading-4">
+                  <Figure className="text-[0.6875rem] leading-4">
                     {bar.higherIsBetter ? '≥' : '≤'} {pct(bar.threshold)}
                   </Figure>
                 </span>
@@ -279,8 +284,51 @@ function CaseMatrix({
  * that. The metric × case matrix underneath is the grid the gate computes.
  */
 function EvalsView(): ReactElement {
+
   const { session, hydrated } = useAuth()
   const token = session?.token ?? null
+
+  /*
+   * The live run is a button, never an effect. It costs model calls, and a page that
+   * spends money on mount is a page somebody turns off.
+   */
+  const [live, setLive] = useState<LiveEvalResponse | null>(null)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [scoring, setScoring] = useState(false)
+
+  /**
+   * Elapsed seconds while a judged run is in flight.
+   *
+   * The wait is 14–134 seconds of real model calls and the only feedback used to be a
+   * disabled button. On a screen being demonstrated to a room, a control that goes quiet
+   * for two minutes reads as broken long before it reads as working.
+   */
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!scoring) return
+    setElapsed(0)
+    const started = performance.now()
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((performance.now() - started) / 1000))
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [scoring])
+
+  const runLive = async (): Promise<void> => {
+    setScoring(true)
+    setLiveError(null)
+    try {
+      setLive(await runLiveEvals(token))
+    } catch (error) {
+      // The previous result is KEPT. Clearing it sent the card back to "One cell left
+      // empty" — copy that reads as a deliberate policy ("the platform refuses to fake
+      // it") rather than as the failure it actually is. A failed re-score must not
+      // rewrite the history of a successful one.
+      setLiveError(errorSentence(error, 'The live evaluation could not run.'))
+    } finally {
+      setScoring(false)
+    }
+  }
   const report = useLoad<EvalsReportResponse>(() => getEvalsReport(token), token, hydrated)
   const data = report.data
 
@@ -431,16 +479,82 @@ function EvalsView(): ReactElement {
             platform leaves a cell of the score matrix empty rather than fill it
             with a number it cannot defend. */}
         <Card className="min-w-0">
-          <CardHeader eyebrow="ragas · answer relevancy" title="One cell left empty" />
-          <CardBody>
-            <SceneState name="matrix" size="sm">
+          <CardHeader
+            eyebrow="ragas · answer relevancy"
+            title={live === null ? 'One cell left empty' : 'Scored by ragas'}
+          />
+          <CardBody className="space-y-3">
+            {live === null ? (
               <Absence
                 figure="Answer relevancy"
-                why="Scoring it needs a model to judge a model; every figure here is deterministic."
-                needed="An LLM judge wired into the gate."
+                why="Scoring it needs a model to judge a model, and every figure on this page is deterministic. The number is not withheld — it is not computed until somebody asks, because asking costs model calls."
+                needed="Press the button; the run is metered like any other call."
                 className="text-left"
               />
-            </SceneState>
+            ) : (
+              <>
+                {/* The caveat sits ABOVE the numbers, not below them, because the number
+                    is what gets read and quoted. Faithfulness here is scored with the
+                    retrieved context standing in as the answer, which makes it 1.000 by
+                    construction — and a card whose own copy argues against filling a cell
+                    with an undefendable figure must not then present that 1.000 as
+                    "this platform's answers are perfectly grounded". Stating the setup is
+                    what keeps the figure a measurement of the metrics rather than a claim
+                    about the product. */}
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Scored with the retrieved context standing in as the answer, so this
+                  measures that the ragas metrics run end-to-end against real content —
+                  not that a generated answer is good.{' '}
+                  <span className="text-foreground">
+                    Faithfulness is therefore 1.000 by construction.
+                  </span>{' '}
+                  Scoring a generated answer costs one generation call per case and is the
+                  next increment.
+                </p>
+                <dl className="space-y-2">
+                {live.metrics.map((m) => (
+                  <div key={m.name} className="flex items-baseline justify-between gap-3">
+                    <dt className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                      {m.name}
+                    </dt>
+                    <dd className="shrink-0">
+                      {m.value === null ? (
+                        <span className="text-xs text-muted-foreground">{m.note}</span>
+                      ) : (
+                        <Figure className="tabular text-lg font-semibold text-foreground">
+                          {m.value.toFixed(3)}
+                        </Figure>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+                </dl>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => void runLive()}
+              disabled={scoring}
+              className="inline-flex h-11 w-full touch-manipulation items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {scoring
+                ? `Judging… ${elapsed}s`
+                : live === null
+                  ? `Score ${LIVE_EVAL_CASES} cases with ragas`
+                  : 'Score again'}
+            </button>
+            {/* Said before it is pressed, not after. The card's copy admitted "asking
+                costs model calls" without ever saying how many, which is the same
+                omission it criticises elsewhere on this page. */}
+            <p className="text-center text-[0.6875rem] text-muted-foreground">
+              {scoring
+                ? 'Judged calls are in flight; this takes 15–120 seconds.'
+                : `${LIVE_EVAL_CASES} cases · ~${LIVE_EVAL_CASES * 9} gateway calls · metered to your tenant`}
+            </p>
+            {liveError !== null && (
+              <p className="text-xs text-block-ink">{liveError}</p>
+            )}
+            {live !== null && <Receipt origin={live.source} />}
           </CardBody>
         </Card>
       </div>
@@ -449,6 +563,7 @@ function EvalsView(): ReactElement {
       <DataPanel
         eyebrow="seed corpus"
         title="Metric × case matrix"
+        collapsible
         actions={
           cases.length ? (
             <Badge tone="neutral">

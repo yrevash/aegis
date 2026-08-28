@@ -232,6 +232,7 @@ function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElemen
       <DataPanel
         eyebrow="probed concurrently · every verdict keeps its evidence"
         title="Dependencies"
+        collapsible
         maxHeight={420}
         // `w-full` because `DataPanel`'s toolbar is a wrapping flex row and the
         // strip is the only thing in it: without it the bar shrinks to its content.
@@ -444,6 +445,7 @@ function PipelinePanel({
         <DataPanel
           eyebrow="job_runs.error · the reason the worker recorded"
           title="Recent failures"
+          collapsible
           maxHeight={320}
         >
           <Table className="min-w-[560px]">
@@ -518,7 +520,12 @@ function PipelinePanel({
         with a `maxHeight` keeps every receipt readable and stops the page growing to
         fit them (DESIGN.md §4: wide/tall content scrolls inside its own container).
       */}
-      <DataPanel eyebrow="provenance" title="Where each figure comes from" maxHeight={200}>
+      <DataPanel
+        eyebrow="provenance"
+        title="Where each figure comes from"
+        collapsible
+        maxHeight={200}
+      >
         <div className="space-y-3">
           {Object.entries(data.sources).map(([key, sql]) => (
             <Receipt key={key} label={key} origin={sql} className="first:border-t-0 first:pt-0" />

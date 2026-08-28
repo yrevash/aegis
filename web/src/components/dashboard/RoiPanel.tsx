@@ -45,7 +45,7 @@ function Projection({ label, value, format, sub }: ProjectionProps): ReactElemen
           {value == null ? '—' : format(value)}
         </Figure>
       </p>
-      <p className="mt-1.5 font-mono text-[0.64rem] text-muted-foreground">{sub}</p>
+      <p className="mt-1.5 font-mono text-[0.6875rem] text-muted-foreground">{sub}</p>
     </div>
   )
 }
@@ -126,7 +126,7 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
             <p className="mt-1.5">
               <Figure size="stat">{formatUsd(manualCostPerCaseUsd(a))}</Figure>
             </p>
-            <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.64rem] text-muted-foreground">
+            <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.6875rem] text-muted-foreground">
               <Clock className="size-3" aria-hidden /> ~{a.manualMinutes} min · ${a.laborRateUsdPerHour}/hr
             </p>
           </div>
@@ -140,7 +140,7 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
             <p className="mt-1.5">
               <Figure size="stat">{unitCost != null ? formatUsd(unitCost, 4) : '—'}</Figure>
             </p>
-            <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.64rem] text-muted-foreground">
+            <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.6875rem] text-muted-foreground">
               <Clock className="size-3" aria-hidden /> ~{a.agentSeconds}s · measured unit cost
             </p>
           </div>

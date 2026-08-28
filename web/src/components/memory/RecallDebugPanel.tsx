@@ -46,11 +46,11 @@ function RecallRow({ item }: { item: RecallDebugItem }): ReactElement {
         </span>
         <Figure
           label={`Match score ${item.score.toFixed(2)}`}
-          className="shrink-0 text-[0.66rem] leading-4 text-foreground"
+          className="shrink-0 text-[0.6875rem] leading-4 text-foreground"
         >
           {item.score.toFixed(2)}
         </Figure>
-        <Badge tone={item.injected ? 'ok' : 'neutral'} className="shrink-0 text-[0.54rem]">
+        <Badge tone={item.injected ? 'ok' : 'neutral'} className="shrink-0 text-[0.6875rem]">
           {item.injected ? 'used' : 'not used'}
         </Badge>
         <ChevronDown
@@ -66,7 +66,7 @@ function RecallRow({ item }: { item: RecallDebugItem }): ReactElement {
           {RECALL_DIMENSIONS.map((dim) => (
             <div key={dim.key}>
               <div className="mb-1 flex items-center gap-1">
-                <span className="eyebrow text-[0.5rem]">{dim.label}</span>
+                <span className="eyebrow text-[0.6875rem]">{dim.label}</span>
                 <InfoTip label={dim.label} className="size-3">
                   {dim.hint}
                 </InfoTip>
@@ -105,7 +105,7 @@ function RecallGroup({
         <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <h4 className="t-label text-foreground">{title}</h4>
         <span aria-hidden className={cn('size-2 shrink-0 rounded-full', dotClass)} />
-        <Figure className="ml-auto text-[0.6rem] leading-4 text-muted-foreground">
+        <Figure className="ml-auto text-[0.6875rem] leading-4 text-muted-foreground">
           {count} used
         </Figure>
       </div>
@@ -273,14 +273,14 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                       className="w-12"
                       label="Context budget used"
                     />
-                    <Figure className="text-[0.62rem] leading-4 text-foreground">
+                    <Figure className="text-[0.6875rem] leading-4 text-foreground">
                       {data.tokens_used} / {TOKEN_BUDGET} tokens
                     </Figure>
                   </span>
                 </figcaption>
                 <pre
                   translate="no"
-                  className="min-w-0 flex-1 overflow-auto p-3 font-mono text-[0.68rem] leading-relaxed break-words whitespace-pre-wrap text-foreground"
+                  className="min-w-0 flex-1 overflow-auto p-3 font-mono text-[0.6875rem] leading-relaxed break-words whitespace-pre-wrap text-foreground"
                 >
                   {data.working_memory}
                 </pre>

@@ -162,8 +162,29 @@ unit at **70%** of the numeral, name below in secondary ink, and **4px** between
 
 ## 3. Type
 
-Inter for interface, **JetBrains Mono for every numeral, id, cost, count and timestamp** via the
-`Figure` primitive, so columns align and figures do not reflow as they tick.
+**IBM Plex Sans** for interface *and* display, **JetBrains Mono for every numeral, id, cost, count
+and timestamp** via the `Figure` primitive, so columns align and figures do not reflow as they tick.
+
+Plex Sans is a superfamily, so `--font-display` resolves to the same family as `--font-sans`: the
+display voice comes from weight and tracking, not a second face. The token stays rather than being
+deleted, so a distinct display face can return without touching a call site.
+
+**`--font-mono` does not move to Plex Mono, deliberately.** Both monos have an identical `0.6000em`
+advance, so column alignment is unchanged either way — but Plex Mono's x-height is 6.2% smaller, and
+mono carries every figure in this product at 11.52px, read off a projector. Family coherence is not
+worth that trade across 324 call sites.
+
+**No functional text is *declared* below 11px**, enforced by
+`tests/design/textFloor.test.mjs` over arbitrary utilities, `font-size` declarations and the
+`--text-*` scale. Being on the size ramp is not a defence: a size can be on the ramp and still be
+unreadable, so the test ignores the ramp and asks only whether a human can read the value.
+
+**Two things it deliberately does not claim.** The reader's own text-size control has a *Small*
+step at 90%, which takes an 11px declaration to 9.9px — that is a preference someone chose, and
+overriding it would be worse than honouring it. And a handful of chart labels are sized in SVG
+attributes rather than utilities, which a source scan over class names cannot see. The floor is a
+floor on what this codebase *declares*, not a guarantee about every pixel the browser finally
+paints, and stating it as the latter would be a claim the test does not support.
 
 ```
 display  28/32  -0.02em 600   page title — ONE per screen
@@ -235,6 +256,54 @@ by `web/tests/devops/healthStrip.test.mjs`.
 required component is genuinely down, the server's own `detail` stays visible in the failure
 banner. The moment it is needed is the wrong moment to make someone hover for it.
 
+### Listings open closed — hover reveals, click pins
+
+The rule above, generalised, and it now governs **every screen for every role**.
+
+The forcing function is the demo: the whole platform is presented in **ten to fifteen minutes**. A
+reviewer arriving on a screen gets a few seconds to decide what it is. If those seconds are spent
+scrolling past forty rows of a table to find the one figure that matters, the screen has failed —
+however correct the table is.
+
+**So a listing is closed by default.** Any panel whose body is a list of rows — documents,
+approvals, audit entries, jobs, prompts, seats, advisories, probes, components — opens as a single
+bar carrying **its title, its row count, and one key figure**. Nothing else.
+
+    Documents                                    10 rows · 7 ingested
+
+That bar is the whole contract: a reviewer learns *what this panel holds* and *that it is populated*
+without reading one row. **Hover expands it. Click pins it open.** Hover is for a glance; the pin is
+for the reviewer who actually wants to read, and it must survive the pointer leaving.
+
+**Never `display:none`.** The rows are collapsed, not removed — they stay in the accessibility tree
+and reachable by keyboard, and the trigger is a real `<button>` with `aria-expanded` naming its
+panel. Hiding is the redesign; losing is the regression, exactly as above.
+
+**One thing per page stays open.** A page of nothing but closed bars explains nothing. Each screen
+keeps its *primary* surface expanded — the thing the page is named after — and closes everything
+below it. On Documents that is the upload control and the corpus figures; the document list closes.
+
+### Every page explains itself, without prose
+
+A reviewer must be able to name what a screen does from the screen alone, with no narration and no
+paragraph to read.
+
+**The page's subject is its structure, not its sentences.** Documents means: an obvious way to
+upload, the figures that say what the corpus is made of, and a closed list. That is the whole page.
+A reader who needs the mechanism explained hovers an `InfoTip`; a reader who needs a number defended
+reads its `Receipt`.
+
+**Text is a last resort, and a label beats a sentence.** No paragraph earns its place on a page when
+a noun would do. Cut in this order, and stop as soon as the screen reads:
+
+1. any sentence restating the label above it
+2. any sentence giving advice
+3. keep the sentence naming a file, route, table, rail or figure — that one is the glass box
+4. what remains is documentation; it belongs in `docs/`, not on the screen
+
+**What is never cut:** a `Receipt`, an `Absence`, or an active failure's remediation. Provenance is
+the product (§5) — quiet is achieved by *relocating* evidence, never by deleting it.
+
 ## 5. The receipt, still the signature
 
 Aegis refuses to assert anything without its origin — `Source:` lines, evidence on health rows,
@@ -254,6 +323,31 @@ Budget **4** (was 2). Motion confirms a state change, reveals structure, or show
 - **No counting-up on a governance figure** — a spend cap that animates looks approximate.
 - No scroll-jacking, no parallax, no infinite ambient loops on operator screens.
 - `prefers-reduced-motion` respected on every animated element, including the 3D.
+
+**Four named motions, and a fifth is a change to this file rather than a component decision.**
+M1 *Arrive* (content enters once, staggered — the only GSAP motion), M2 *Settle* (a changed value
+takes a tint wash, no transform), M3 *Beat* (the console heartbeat, one pulse per wire event),
+M4 *Trace* (a streaming row slides in). M1 fires on **first mount only** — never on a refresh, a
+filter change or a tab switch; a stagger that replays on every poll is what makes a product look
+like a template.
+
+**GSAP is in the stack, and it is fenced.** Its reason is orchestration: a staggered, interruptible,
+properly-cleaned-up entrance across siblings is the thing CSS `animation-delay` does badly. If a
+proposed use is not orchestration across siblings, it is a CSS transition and belongs in
+`globals.css`.
+
+The fence exists because **the reduced-motion kill switch cannot reach GSAP**, and this was measured
+rather than assumed: under `reduce`, a `@keyframes` element had already snapped to its 300px end
+state while a GSAP tween sat mid-flight at 105px — exactly where it sat with reduced motion off.
+`globals.css` zeroes `animation-*` and `transition-*`; GSAP writes `transform` into inline style on
+every frame, so that rule is not weak against it, it is *inapplicable*.
+
+So every tween lives inside `useGSAP` (StrictMode is on; a bare effect tween survives the
+double-mount and fights its own second copy) **and** inside a `gsap.matchMedia()` block with an
+explicit `(prefers-reduced-motion: reduce)` conditional, whose reduce branch **sets the final state**
+rather than returning — a tween that hides before it reveals, skipped, is content that never
+appears. `tests/design/gsapBoundary.test.mjs` fails on any of the four violations, because a
+convention without a test decays the first time somebody writes the one-line version.
 
 ## 7. 3D — simple geometry, and never load-bearing
 
@@ -295,6 +389,14 @@ downloads from a CDN at runtime and its own docs say that is not for production.
 
 **Spline is ruled out**: its runtime is 544 kB gzip plus the scene file, with a documented case of
 17.9 s of CPU script time. Fine as an *authoring* tool to produce the still; never as a runtime.
+
+**A note this section owes the reader.** The reasoning above rejected `react-force-graph-3d` at
++305 kB and Spline at 544 kB, and GSAP was later added *alongside* Motion — a second animation
+engine, on a page that already had one. That is in tension with the paragraph above it, and the
+tension is real rather than resolved by argument. It was the owner's decision, taken with the cost
+known, on the grounds that the entrance orchestration was worth it. Recording it here is the point:
+a rule that gets quietly bent stops being a rule, and the next person deserves to see that this one
+was bent on purpose and by whom.
 
 ### The knowledge-graph decision, stated honestly
 

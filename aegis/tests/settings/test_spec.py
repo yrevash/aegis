@@ -123,8 +123,20 @@ def test_the_catalogue_stays_small_enough_that_every_key_is_tested():
     cannot switch off a platform safety skill" arithmetic rather than a check. The
     alternative was a second resolution mechanism — a scope column read by a bespoke
     fold — which is exactly the thing this catalogue exists to prevent.
+
+    Raised from 25 to 27 for the two long-horizon ceilings, ``agent.max_trajectory_tokens``
+    and ``agent.max_tool_result_tokens``. Same price, paid the same way: both are read on
+    the hot path in :mod:`aegis.agent.subagent` (the trajectory check before each model
+    call, the per-result truncation before each append), both are bound into
+    ``AGENT_SETTING_BINDINGS`` so a tenant write actually reaches the run, and both are
+    ``TIGHTEN_ONLY`` with an independent entry in ``_STRICTER_END``.
+
+    Worth stating why they belong in the catalogue at all rather than staying config: a
+    ceiling a tenant cannot tighten is a platform default wearing the word "cap". These
+    two bound spend and guarantee termination, which is exactly the class of figure a
+    tenant admin is accountable for and must be able to set harder than we do.
     """
-    assert len(SETTING_SPECS) <= 25
+    assert len(SETTING_SPECS) <= 27
 
 
 # ── the refusals, driven ──────────────────────────────────────────────────────

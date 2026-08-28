@@ -157,6 +157,37 @@ class AgentState(TypedDict, total=False):
     cost_usd: Annotated[float, operator.add]
     status: str
     blocked: bool
+    # ── The grounded verify loop ──────────────────────────────────────────────
+    # ``transcript`` is the fix for a real defect: ``plan`` rebuilt its prompt from
+    # scratch every round and stringified prior outcomes into the user turn, so the
+    # model never saw its own past as conversation. This accumulates the EXECUTED
+    # history as real assistant + ``tool``-role turns. It is a separate key rather
+    # than a reducer on ``messages`` precisely so the note below about ``messages``
+    # stays true: that one is still a per-round scratch buffer.
+    #
+    # ``tool_results`` still does NOT accumulate, for the reason already given below —
+    # accumulating it would make ``reflect`` re-see an already-repaired failure.
+    # ``verify`` reads the current round's results before ``reflect`` sees them.
+    transcript: Annotated[list[dict[str, Any]], operator.add]
+    # One ``sha256(tool + canonical args)`` per executed call. Must accumulate, or
+    # oscillation detection in round three cannot see what round one already tried.
+    attempt_fingerprints: Annotated[list[str], operator.add]
+    # Counts only rounds that acted and were judged repairable — deliberately separate
+    # from ``plan_iterations`` so a read-only round no longer spends the repair budget.
+    # That arithmetic is what made a failed write unretryable at the old default.
+    repair_iterations: Annotated[int, operator.add]
+    # Last-write-wins, and safe: ``verify`` is the only writer, which is the same
+    # precedent the fan-out keys below set. The latest verdict is all ``reflect``
+    # needs; the history reaches the UI on the wire, not through state.
+    verification: dict[str, Any]
+    # Wall-clock bound for the loop. Written by ``guard_input`` once and re-stamped by
+    # ``approval`` on resume — two writers, but never in the same superstep and on
+    # mutually exclusive paths. The re-stamp exists because a run can park at the human
+    # gate indefinitely; a deadline set before the park would fire the instant somebody
+    # approved, finalising every approved run.
+    loop_deadline_ts: float
+    loop_budget_left_s: float
+
     # ── The adaptive fan-out (phase 5) ────────────────────────────────────────
     # All last-write-wins, and all safe as such: exactly one node writes each of
     # them, and the fan-out itself runs INSIDE ``run_team`` rather than as parallel

@@ -107,6 +107,14 @@ def full_run(run_id: str = "run-full") -> list[dict[str, Any]]:
             rationale="destructive",
         ),
         events.tool_result("call-1", True, "escalated"),
+        events.verification(
+            outcome="FAILED",
+            method="read-back",
+            reason="the record does not show the escalation",
+            repairable=True,
+            evidence="R1 status: open",
+            round=1,
+        ),
         events.reflection(
             iteration=1, max_iterations=2, done=False, will_retry=True, reason="retry"
         ),

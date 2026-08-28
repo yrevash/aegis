@@ -634,6 +634,18 @@ AGENT_PIPELINE = PipelineSpec(
             ),
         ),
         PipelineStage(
+            name="verify",
+            label="Verify the outcome",
+            owner="aegis.agent.graph",
+            summary=(
+                "Check what actually happened against something outside the model: the "
+                "result rows, or the record read back."
+            ),
+            emits=(
+                _stream("verification", "what was checked, how, and whether it held"),
+            ),
+        ),
+        PipelineStage(
             name="reflect",
             label="Reflect & self-repair",
             owner="aegis.agent.graph",

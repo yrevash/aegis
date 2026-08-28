@@ -44,6 +44,7 @@ Three more invariants, all enforced here rather than hoped for:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -115,6 +116,12 @@ class SubAgentStatus(StrEnum):
     OK = "ok"
     FAILED = "failed"
     TIMEOUT = "timeout"
+    #: The lane's trajectory reached its token ceiling. Like ``TIMEOUT`` this is a
+    #: DESIGNED terminal state and not an error: what the lane found so far is kept and
+    #: the synthesis names it as cut short. Aegis has no trajectory compaction, so this
+    #: is the bound that stands in for it — and a lane that stops at a stated ceiling is
+    #: a different thing from one that fails at a context-window error nobody predicted.
+    CEILING = "ceiling"
     #: The lane was cancelled from outside (a killed agent, or the fan-out's wall clock).
     CANCELLED = "cancelled"
 
@@ -234,8 +241,24 @@ class SubAgentResult:
 
     @property
     def contributed(self) -> bool:
-        """Whether this lane produced findings the synthesis can use."""
-        return self.status is SubAgentStatus.OK and bool(self.findings.strip())
+        """Whether this lane produced findings the synthesis can use.
+
+        ``CEILING`` counts, and that is the whole point of having the state. A lane
+        stopped at its trajectory ceiling has, by construction, done a great deal of
+        work — the ceiling is what it hit *after* several steps — and the docstring on
+        the ceiling branch promises that what it found before the cut is kept. It was
+        not: ``CEILING`` is not ``OK``, so every finding was dropped and the synthesis
+        reported the lane as having returned nothing.
+
+        Partial findings from a truncated lane are worth strictly more than silence.
+        The synthesis names the truncation in words (see ``_omission_phrase``), so a
+        reader is told the lane was cut short *and* gets what it managed to find,
+        rather than being told nothing twice over.
+        """
+        return self.status in (
+            SubAgentStatus.OK,
+            SubAgentStatus.CEILING,
+        ) and bool(self.findings.strip())
 
     def as_dict(self) -> dict[str, Any]:
         """Return a plain, JSON-friendly record (for graph state and the wire)."""
@@ -495,6 +518,23 @@ async def _guarded(
         )
         return result
 
+    if result.status is SubAgentStatus.CEILING:
+        # A lane cut at its ceiling is NOT a lane that finished. Emitting "done" here
+        # made the designed terminal state invisible: the console rendered a truncated
+        # lane exactly like a clean one, and the only place a reader could have learned
+        # otherwise was a field the console does not draw. `ceiling` sits beside
+        # `timeout` for the same reason `timeout` is not `done`.
+        writer(
+            events.agent_status(
+                agent_id=spec.agent_id,
+                role=spec.role,
+                label=spec.label,
+                status="ceiling",
+                detail=result.error,
+            )
+        )
+        return result
+
     writer(
         events.agent_status(
             agent_id=spec.agent_id,
@@ -538,10 +578,10 @@ async def _loop(
         SpanKind.AGENT,
         f"subagent.{spec.role}",
         attributes={
-            semconv.A2A_FROM: "supervisor",
-            semconv.A2A_TO: spec.role,
-            semconv.A2A_REASON: task,
-            semconv.A2A_PROTOCOL: "a2a",
+            semconv.HANDOFF_FROM: "supervisor",
+            semconv.HANDOFF_TO: spec.role,
+            semconv.HANDOFF_REASON: task,
+            semconv.HANDOFF_SCOPE: "in-process",
         },
     ):
         for step in range(1, max(1, spec.max_steps) + 1):
@@ -555,6 +595,44 @@ async def _loop(
                     detail=f"step {step}/{spec.max_steps}",
                 )
             )
+            # The trajectory ceiling, checked before the call rather than after it.
+            # Checking after would mean paying for the call that breached the bound,
+            # which is the one call the bound exists to avoid.
+            budget = getattr(deps.config, "max_trajectory_tokens", 0)
+            if budget:
+                # Deferred: `aegis.agent` must import without pulling heavy dependencies
+                # — `tests/agent/test_isolation.py` enforces that, and tiktoken sits
+                # behind this module. The estimator degrades to len//4 without it, and a
+                # monotone estimate is all a ceiling needs.
+                from aegis.memory.tokens import count_tokens
+
+                # `ensure_ascii=False` is the whole fix and it is not cosmetic.
+                #
+                # json.dumps defaults to ensure_ascii=True, so every Devanagari character
+                # became a six-byte \uXXXX escape BEFORE being tokenised. Measured on the
+                # same service-desk trajectory in two languages:
+                #
+                #   english: real=11332  measured=11757  ratio=1.04
+                #   hindi:   real=28272  measured=60057  ratio=2.12  -> killed at 36000
+                #
+                # The Hindi lane was measured at 2.12x its real cost and cut while
+                # carrying ~17k real tokens — less than half the stated bound and well
+                # inside any model's context window. The failure was invisible: an
+                # operator saw a configured bound of 36000 and a lane dying, with no way
+                # to know the number being compared was not the number in the config.
+                #
+                # For a platform that ships to India this is not a rounding error, and
+                # `default=str` is kept because a non-serialisable value should degrade
+                # rather than take the run down.
+                size = count_tokens(json.dumps(messages, ensure_ascii=False, default=str))
+                if size > budget:
+                    result.status = SubAgentStatus.CEILING
+                    result.error = (
+                        f"the lane stopped at its trajectory ceiling ({size} tokens, "
+                        f"limit {budget}); what it found before that is kept."
+                    )
+                    break
+
             completion = await call_with_retry(
                 lambda: deps.complete(
                     spec.model_role, messages, tools=definitions or None
@@ -584,6 +662,7 @@ async def _loop(
                     _tool_message(
                         call,
                         f"'{call.name}' is not available to this agent; it was not run.",
+                        max_tokens=getattr(deps.config, "max_tool_result_tokens", 0),
                     )
                 )
             for call in proposed:
@@ -633,7 +712,15 @@ async def _loop(
                     trace_id=trace_id,
                     result=result,
                 )
-                messages.append(_tool_message(call, summary))
+                # The bound applies here above all: `summary` is whatever the tool
+                # returned, and that is the unbounded input a run is actually exposed to.
+                messages.append(
+                    _tool_message(
+                        call,
+                        summary,
+                        max_tokens=getattr(deps.config, "max_tool_result_tokens", 0),
+                    )
+                )
 
         # Step cap reached with the model still wanting tools: finalise on what we have
         # rather than looping. The cap is what guarantees termination.
@@ -700,9 +787,62 @@ async def _execute(
     return summary
 
 
-def _tool_message(call: Any, content: str) -> dict[str, Any]:  # noqa: ANN401 - ToolCallResult
-    """Build the ``tool``-role reply the loop feeds back to the model."""
-    return {"role": "tool", "tool_call_id": call.id or "", "content": content}
+def _tool_message(
+    call: Any,  # noqa: ANN401 - ToolCallResult
+    content: str,
+    *,
+    max_tokens: int = 0,
+) -> dict[str, Any]:
+    """Build the ``tool``-role reply the loop feeds back to the model.
+
+    ``max_tokens`` bounds ONE result's contribution to the trajectory, and it is the
+    bound that bites first in practice: a run's real exposure is one unbounded tool
+    result — a search that returns a whole document, a query that matches ten thousand
+    rows — not a long conversation. The whole-trajectory ceiling would catch that too,
+    but only by ending the lane, when truncating one oversized result would have let it
+    finish.
+
+    The truncation is **marked, never silent**. A model handed a quietly shortened result
+    will reason confidently about the part it was given, and that is worse than a model
+    told plainly that it is looking at the beginning of something longer.
+
+    The full text is not lost: it stays on the result record that the trace and the audit
+    read, so the model loses the tail and the evidence does not.
+    """
+    return {
+        "role": "tool",
+        "tool_call_id": call.id or "",
+        "content": bound_result_text(content, max_tokens=max_tokens),
+    }
+
+
+def bound_result_text(content: str, *, max_tokens: int) -> str:
+    """Bound one tool result's contribution to a trajectory, with a visible marker.
+
+    Extracted so the main graph and a sub-agent lane cannot disagree about it. They did:
+    the ceiling was enforced only inside ``run_subagent``, so the identical 16k-token
+    search result was truncated in a lane and pasted whole on the single-agent path —
+    which is the path the demo actually runs.
+
+    ``max_tokens <= 0`` disables the bound; the caller decides, this function does not
+    invent a default.
+    """
+    if max_tokens <= 0 or not content:
+        return content
+
+    from aegis.memory.tokens import count_tokens
+
+    size = count_tokens(content)
+    if size <= max_tokens:
+        return content
+    # Proportional cut on characters — the estimator is monotone, so this lands close
+    # enough, and being slightly under a ceiling is the safe direction.
+    keep = max(200, int(len(content) * (max_tokens / size)))
+    return (
+        content[:keep]
+        + f"\n\n[truncated: {size} tokens exceeded the {max_tokens}-token "
+        + "ceiling for one tool result; the full text is on the run record]"
+    )
 
 
 def _last_assistant_text(messages: list[dict[str, Any]]) -> str:

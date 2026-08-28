@@ -41,7 +41,7 @@ export type RunStatus =
  * content in particular), so a planted instruction in a third-party page is
  * blocked and shown rather than read by the model.
  */
-export type GuardStage = 'input' | 'output' | 'tool_result'
+export type GuardStage = 'input' | 'output' | 'tool_result' | 'memory_write'
 
 /**
  * Outcome of a guardrail check.
@@ -332,6 +332,22 @@ export interface BudgetExceeded extends BaseEvent {
  * on the floor by a reducer that had no branch for it — the agent repairing itself
  * is the single most demoable thing it does, and it was invisible.
  */
+export interface Verification extends BaseEvent {
+  type: 'verification'
+  /** VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED. */
+  outcome: string
+  /** The tier that decided: `deterministic`, `read-back` or `unverifiable`. */
+  method: string
+  /** One sentence naming what was checked, and the result. */
+  reason: string
+  /** Whether another round could plausibly change this outcome. */
+  repairable: boolean
+  /** The record read back, or the failure text. May be empty. */
+  evidence: string
+  /** The planning round this check follows. */
+  round: number
+}
+
 export interface Reflection extends BaseEvent {
   type: 'reflection'
   /** 1-based planning round this reflection follows (hard-capped). */
@@ -372,9 +388,15 @@ export interface RoutingEvent extends BaseEvent {
 /**
  * One sub-agent's lifecycle beat in a concurrent fan-out.
  *
- * `status: 'timeout'` is a **designed** terminal state, not an error: the run degrades
- * gracefully, names the omitted agent in {@link SynthesisEvent}, and finishes. A card
- * that renders it as a stuck spinner is reading the protocol wrong.
+ * `status: 'timeout'` and `status: 'ceiling'` are **designed** terminal states, not
+ * errors: the run degrades gracefully, names the affected agent in
+ * {@link SynthesisEvent}, and finishes. A card that renders either as a stuck spinner is
+ * reading the protocol wrong.
+ *
+ * The two differ in what survives. `timeout` means the lane ran out of wall clock and
+ * has nothing; `ceiling` means it ran out of trajectory and its findings **are** in the
+ * answer, partially. A reader who is not told the difference will over-trust a truncated
+ * lane or discount a complete one.
  */
 export interface AgentStatus extends BaseEvent {
   type: 'agent_status'
@@ -384,7 +406,7 @@ export interface AgentStatus extends BaseEvent {
   role: string
   /** Human label for the agent's lane in the console. */
   label: string
-  /** queued | started | thinking | acting | done | failed | timeout. */
+  /** queued | started | thinking | acting | done | failed | timeout | ceiling. */
   status: string
   /** Short human detail for this beat. */
   detail: string
@@ -443,6 +465,7 @@ export type StreamEvent =
   | Provenance
   | BudgetExceeded
   | Reflection
+  | Verification
   | RoutingEvent
   | AgentStatus
   | SynthesisEvent

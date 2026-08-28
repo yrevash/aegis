@@ -30,14 +30,19 @@ Agentic Applications (ASI, 2026)**, and Simon Willison's **"lethal trifecta."**
 
 ## 2. OWASP Top 10 for Agentic Applications (ASI, 2026)
 
+> Titles below are verbatim from the **OWASP Top 10 for Agentic Applications**, version
+> 2026 (published December 2025), read from the project's own PDF rather than from
+> secondary sources. Five of these titles were previously wrong here; ASI06 was
+> substantively so.
+
 | ID | Threat | Our mitigation |
 |----|--------|----------------|
 | **ASI01** | Agent Goal Hijack | Input injection rail + Spotlighting stop instruction-injection; the human gate bounds any hijacked plan before it acts. |
-| **ASI02** | Tool Misuse & Exploitation | Per-persona **tool allowlists**; treat the LLM as a hostile user — tools sit behind the same IAM/rate limits as external traffic; reversible + audited. |
-| **ASI03** | Identity & Privilege Abuse | **Multi-tenant RBAC** — signed JWT claims (`{sub, role, tenant_id}`), Argon2id passwords, a three-tier hierarchy (platform / tenant admin / user); **Postgres RLS + app-scoping** isolate every tenant's data; separate `/admin` surfaces; least-privilege tool grants (ADR 0008). |
-| **ASI04** | Agentic Supply Chain | Single vetted model gateway; pinned deps; no arbitrary local model loading. |
-| **ASI05** | Unexpected Code Execution | No agent code-exec tool by default; tools are typed, allowlisted callables — not a shell. |
-| **ASI06** | Context / Retrieval Manipulation | **Azure Spotlighting** (delimiting + datamarking) marks retrieved text as *data, not instructions*; validate-before-write to the store. |
+| **ASI02** | Tool Misuse and Exploitation | Per-persona **tool allowlists**; treat the LLM as a hostile user — tools sit behind the same IAM/rate limits as external traffic; reversible + audited. |
+| **ASI03** | Identity and Privilege Abuse | **Multi-tenant RBAC** — signed JWT claims (`{sub, role, tenant_id}`), Argon2id passwords, a three-tier hierarchy (platform / tenant admin / user); **Postgres RLS + app-scoping** isolate every tenant's data; separate `/admin` surfaces; least-privilege tool grants (ADR 0008). |
+| **ASI04** | Agentic Supply Chain Vulnerabilities | Single vetted model gateway; pinned deps; no arbitrary local model loading. |
+| **ASI05** | Unexpected Code Execution (RCE) | No agent code-exec tool by default; tools are typed, allowlisted callables — not a shell. |
+| **ASI06** | Memory & Context Poisoning | **Azure Spotlighting** (delimiting + datamarking) marks retrieved text as *data, not instructions*; and the fourth rail stage, `GuardStage.MEMORY_WRITE`, screens a candidate fact **before** it reaches the durable store — the other three stages cannot see this attack, because the turn that poisons the store and the turn poisoned by it are different turns. |
 | **ASI07** | Insecure Inter-Agent Communication | Single-orchestrator design; every hop is traced (OTel) and audited; no unauthenticated agent-to-agent channel. |
 | **ASI08** | Cascading Failures | Human gate + conformal uncertainty stop low-confidence actions from chaining; idempotent, reversible actions; per-run trace id. |
 | **ASI09** | Human-Agent Trust Exploitation | Every autonomous action is logged with approver + trace id; the gate forces explicit human approval on high-risk steps — no silent action. |

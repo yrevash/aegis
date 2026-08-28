@@ -85,8 +85,14 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
   }
 
   return (
-    <Card>
-      <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4 p-5">
+    <Card className="flex min-w-0 flex-col">
+      {/* `h-full` + `flex-col`: the panel is a grid item in a stretched row, so the
+          form owns the card's whole height. Without it the form keeps its intrinsic
+          height and the stretch shows up as dead card below it. */}
+      <form
+        onSubmit={(event) => void submit(event)}
+        className="flex h-full min-w-0 flex-col gap-4 p-5"
+      >
         <div className="flex items-center gap-3">
           <FileUp className="size-5 text-muted-foreground" />
           <div>

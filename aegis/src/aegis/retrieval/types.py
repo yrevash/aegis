@@ -480,6 +480,15 @@ class RetrievalOrigin(StrEnum):
 
     VECTOR = "vector"
     GRAPH = "graph"
+    #: The keyword arm. **The wire value says `bm25` and the implementation is
+    #: PostgreSQL `ts_rank`, which is not Okapi BM25** — it has term frequency and
+    #: length normalisation but no IDF, the component that makes a rare term count for
+    #: more than a common one. `aegis.retrieval.lightrag_backend` states this in its own
+    #: docstring; the label did not, so the provenance a reader saw overstated what ran.
+    #:
+    #: The value is kept because it is on the wire in three packages and in stored
+    #: provenance rows; the console renders it as "Keyword (ts_rank)". RRF fuses on
+    #: rank, so the missing IDF affects ordering within this arm and not across arms.
     BM25 = "bm25"
     CACHE = "cache"
 

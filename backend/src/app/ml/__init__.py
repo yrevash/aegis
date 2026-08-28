@@ -153,17 +153,74 @@ def train(
     return _MODEL
 
 
+#: The methods `/ml/explain` and `/ml/model-card` call on whatever this module
+#: serves. A joblib file is not a contract -- it is a pickle of whatever the writer
+#: happened to hold -- so this names what the routes actually require.
+_SPINE_CONTRACT: tuple[str, ...] = ("model_card", "predict_explain")
+
+
+def _refuse_foreign_artifact(obj: object, path: Path | str) -> None:
+    """Refuse an artifact that is not a servable spine, naming what it is instead.
+
+    **Why this exists, and why the check is on the object rather than its class.**
+    ``DEFAULT_ARTIFACT_PATH`` is a shared address: a sibling project promotes
+    challenger models onto exactly this file by design, and any tool that can write
+    a ``.joblib`` can land here. ``TrustworthyModel.load`` is ``joblib.load`` with a
+    return annotation, and an annotation is not a check -- so a foreign artifact
+    loaded fine, sailed past a ``FileNotFoundError`` handler that could never see it,
+    and failed at the first attribute access with ``AttributeError: 'Pipeline' object
+    has no attribute 'model_card'`` and a 500. That message names a symptom four
+    frames from the cause and says nothing about the file that caused it.
+
+    An ``isinstance`` test would be the obvious check and is the wrong one: it makes
+    the class the contract, so a wrapper that satisfies the routes perfectly is
+    refused for having the wrong ancestor. The routes call two methods; that is the
+    contract, and it is what gets tested.
+
+    Args:
+        obj: Whatever the artifact deserialised to.
+        path: Where it came from, so the message names the file to fix.
+
+    Raises:
+        MLModelUnavailableError: When ``obj`` cannot serve. The routes already
+            translate this to a 503 carrying the sentence, which is the honest answer
+            -- there is no usable model -- rather than a 500 about an attribute.
+    """
+    missing = [name for name in _SPINE_CONTRACT if not callable(getattr(obj, name, None))]
+    if not missing:
+        return
+    actual = f"{type(obj).__module__}.{type(obj).__qualname__}"
+    raise MLModelUnavailableError(
+        f"The artifact at {path} is a {actual}, which cannot serve this endpoint: it "
+        f"has no {', '.join(missing)}. Aegis serves a TrustworthyModel -- the spine "
+        "that carries the conformal interval and the SHAP attribution the response "
+        "schema requires, neither of which a bare estimator can produce. Something "
+        "overwrote this file with a different kind of model; a sibling project "
+        "promotes onto this exact path. Retrain with `python -m app.ml`, or promote "
+        "an artifact that satisfies the spine contract."
+    )
+
+
 def load(path: Path | str = DEFAULT_ARTIFACT_PATH) -> TrustworthyModel:
     """Load a persisted spine and cache it for serving.
+
+    The loaded object is checked against the serving contract before it is cached,
+    so a foreign artifact is refused here -- once, with the path in the message --
+    rather than at the first attribute access inside a request handler.
 
     Args:
         path: Artifact produced by :func:`train`.
 
     Returns:
         The loaded :class:`~aegis.ml.model.TrustworthyModel`.
+
+    Raises:
+        MLModelUnavailableError: When the file holds something that cannot serve.
     """
     global _MODEL
-    _MODEL = TrustworthyModel.load(path)
+    candidate = TrustworthyModel.load(path)
+    _refuse_foreign_artifact(candidate, path)
+    _MODEL = candidate
     return _MODEL
 
 

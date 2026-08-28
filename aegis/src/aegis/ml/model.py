@@ -19,10 +19,18 @@ A single :class:`TrustworthyModel` bundles three verified components:
   or prediction sets (classification) with a **guaranteed marginal coverage**
   equal to ``confidence_level``. This calibrated interval is the honest uncertainty
   the agent surfaces as supporting evidence ("predicts X, 90% coverage").
-* **SHAP TreeExplainer (per member)** — exact per-feature attributions computed for
-  each tree member and **averaged with the ensemble's member weights**, so the
+* **SHAP (per member, dispatched by family)** — per-feature attributions computed
+  for each member and **averaged with the ensemble's member weights**, so the
   drivers explain the ensemble's output (exact for the averaged regression output;
-  a per-member mean approximation in classification margin space).
+  a per-member mean approximation in classification margin space). The explainer is
+  chosen per member rather than assumed: ``TreeExplainer`` for the boosters and
+  forests (exact, no reference data), ``LinearExplainer`` for a linear member
+  (exact, closed form, against a stored background), ``PermutationExplainer`` for
+  anything else (model-agnostic). See :func:`_member_explainer` — the **explainer
+  dispatch point**. This used to be tree-only, and that was not a neutral
+  simplification: it decided which models were allowed to be promoted, because a
+  candidate the spine could not explain was marked unpromotable upstream. In a
+  measured AutoML run it discarded the highest-scoring model on the board.
 
 The ensemble is a **solution signal only** — the agent injects the prediction,
 calibrated interval and top SHAP drivers into its answer context as evidence. It
@@ -42,9 +50,14 @@ Targeted library versions (introspected & smoke-tested on 2026-08-05):
   ``conformalize(X_cal, y_cal)`` then ``predict_interval(X)`` →
   ``(pred (n,), intervals (n, 2, n_levels))`` or ``predict_set(X)`` →
   ``(pred (n,), sets (n, n_classes, n_levels))``.
-* shap 0.52 — ``shap.TreeExplainer(member).shap_values(X)`` → ``(n, n_features)``
-  for regression / binary, ``(n, n_features, n_classes)`` for multiclass. Works on
-  XGBoost and sklearn histogram / forest boosters alike.
+* shap 0.51 — every branch returns the same shapes from ``.shap_values(X)``:
+  ``(n, n_features)`` for regression / binary, ``(n, n_features, n_classes)`` for
+  multiclass. ``shap.TreeExplainer(member)`` works on XGBoost and sklearn histogram /
+  forest boosters alike and takes **no** background — supplying one switches it to the
+  interventional algorithm, whose additivity check then fails against the model's own
+  output (verified). ``shap.LinearExplainer(member, background)`` and
+  ``shap.PermutationExplainer(fn, masker)`` both **require** one, because their
+  attributions are stated relative to it.
 """
 
 from __future__ import annotations
@@ -108,9 +121,15 @@ _HGB_PARAMS: dict[str, Any] = {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Estimator reshape point — swap/add ensemble members here (day-of edit).
-# Each member must be a tree model SHAP's TreeExplainer supports (XGBoost, sklearn
-# HistGradientBoosting / RandomForest). To add a RandomForest or stack a meta-learner,
-# edit only these two functions; the conformal + SHAP plumbing adapts automatically.
+# A member no longer has to be a tree: `_member_explainer` dispatches per family, so a
+# RidgeCV, a kNN or a stacked meta-learner is explained rather than refused. Two things
+# a non-tree member does need, both handled by the member itself rather than here:
+#   * a NaN path — sklearn's linear models have none, so wrap one in
+#     `Pipeline(SimpleImputer(median) -> StandardScaler -> estimator)`; the encoded
+#     matrix carries the data's missingness through and a bare Ridge raises on it;
+#   * `predict_proba` if it is a classification member, because the ensemble soft-votes
+#     and MAPIE conformalises class scores — a hard-margin member degenerates both.
+# Edit only these two functions; the conformal + SHAP plumbing adapts automatically.
 # ─────────────────────────────────────────────────────────────────────────────
 def _regression_members(random_state: int) -> list[tuple[str, Any]]:
     """Return the ``(name, estimator)`` members of the regression ensemble."""
@@ -189,6 +208,242 @@ def _encoded_parents(
 def _level_label(value: object) -> str | None:
     """Return a categorical level as a display string (``None`` when absent)."""
     return None if value is None or pd.isna(value) else str(value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHAP explainer dispatch — one algorithm per member family, not one for all.
+# ─────────────────────────────────────────────────────────────────────────────
+_TREE_CLASS_PREFIXES: tuple[str, ...] = (
+    "XGB",
+    "LGBM",
+    "CatBoost",
+    "HistGradientBoosting",
+    "GradientBoosting",
+    "RandomForest",
+    "ExtraTree",
+    "DecisionTree",
+)
+"""Member class-name prefixes routed to ``shap.TreeExplainer``.
+
+Matched on the class name rather than with ``isinstance`` because the tree families that
+matter live in three libraries (xgboost, lightgbm, scikit-learn), and importing all of
+them to answer a question about one fitted member would make this module drag in every
+optional booster. ``ExtraTree`` covers the forest and the single tree alike.
+
+The list errs short on purpose: a tree family missing from it falls through to the
+permutation branch and is explained correctly but slowly, whereas a non-tree matching by
+accident would raise inside ``TreeExplainer``.
+"""
+
+_LINEAR_CLASS_PREFIXES: tuple[str, ...] = (
+    "Ridge",
+    "LinearRegression",
+    "LogisticRegression",
+    "ElasticNet",
+    "Lasso",
+    "Lars",
+    "SGD",
+    "BayesianRidge",
+    "HuberRegressor",
+    "PassiveAggressive",
+    "Perceptron",
+    "TheilSen",
+)
+"""Member class-name prefixes routed to ``shap.LinearExplainer``.
+
+Backed up by a structural ``coef_``/``intercept_`` check in :func:`_member_family`, so a
+linear estimator this list has never heard of is still explained exactly rather than
+approximately.
+"""
+
+_EXPLAIN_BACKGROUND_ROWS = 100
+"""Encoded training rows kept as the reference distribution for non-tree members.
+
+A tree explainer needs no data — the fitted trees' node cover *is* its reference — so this
+was never stored before. A linear or permutation attribution is stated relative to a
+background (``coef_j · (x_j − E[x_j])`` has the expectation inside it), and there is no
+default background that would not silently change every number. 100 rows is enough for a
+stable mean on the encoded matrix and adds kilobytes to the artifact.
+"""
+
+
+@dataclass(frozen=True)
+class _MemberExplainer:
+    """One ensemble member's SHAP explainer, plus how to reach its input space.
+
+    Wrapping the explainer instead of storing it bare keeps
+    :meth:`TrustworthyModel._attributions` free of family-specific branches: it calls
+    ``.shap_values(x)`` on every member exactly as it always did, and the wrapper is what
+    knows that a linear member arrives inside an imputing pipeline whose prefix the row
+    must pass through first.
+
+    Attributes:
+        kind: ``"tree"``, ``"linear"`` or ``"permutation"`` — recorded because a
+            permutation attribution carries Monte-Carlo noise the exact branches do not.
+        explainer: The ``shap`` explainer itself.
+        transform: Applied to the encoded row before the explainer sees it, or ``None``
+            when the member consumes the encoded matrix directly.
+    """
+
+    kind: str
+    explainer: Any
+    transform: Any = None
+
+    @property
+    def expected_value(self) -> np.ndarray | float:
+        """The wrapped explainer's base value — ``E[f(x)]`` over its reference.
+
+        Delegated rather than hidden because it is half of the additivity property this
+        spine is checked against: ``sum(shap_values) + expected_value ≈ prediction``. A
+        wrapper that swallowed it would make that check unwritable, and a SHAP report
+        nobody can verify additivity on is a report that can drift silently.
+
+        Returns:
+            The base value, exactly as the underlying explainer reports it — a scalar for
+            regression and binary margin, one entry per class for multiclass.
+        """
+        return self.explainer.expected_value
+
+    def shap_values(self, x: pd.DataFrame) -> np.ndarray:
+        """Return this member's SHAP values for the encoded rows ``x``.
+
+        Args:
+            x: Encoded feature rows, in the ensemble's input space.
+
+        Returns:
+            ``(n, n_encoded)`` for regression and binary margin, ``(n, n_encoded,
+            n_classes)`` for multiclass — the shapes ``_attributions`` already handles.
+        """
+        rows = self.transform(x) if self.transform is not None else x
+        return np.asarray(self.explainer.shap_values(rows))
+
+
+def _member_family(member: object) -> str:
+    """Classify one *unwrapped* member into the SHAP algorithm that fits it.
+
+    Args:
+        member: A fitted estimator. A pipeline is classified by its final step.
+
+    Returns:
+        ``"tree"``, ``"linear"`` or ``"permutation"``. The last is not a failure — it is
+        the model-agnostic branch, correct for every estimator SHAP has no closed form for.
+    """
+    name = type(member).__name__
+    if name.startswith(_TREE_CLASS_PREFIXES):
+        return "tree"
+    if name.startswith(_LINEAR_CLASS_PREFIXES):
+        return "linear"
+    if hasattr(member, "coef_") and hasattr(member, "intercept_"):
+        return "linear"
+    return "permutation"
+
+
+def _unwrap_member(member: object, background: pd.DataFrame | None) -> tuple[object, Any, Any]:
+    """Split a pipeline member into (final estimator, row transform, transformed background).
+
+    A member that needs imputation — every linear one, since scikit-learn's linear models
+    have no NaN path and the encoded matrix carries the data's missingness through — is
+    fitted as ``Pipeline(SimpleImputer → StandardScaler → estimator)``. Explaining the
+    final step directly is what makes the attribution exact, and it stays aligned with the
+    encoded columns because an affine per-column transform leaves ``coef_j · (x_j − E[x_j])``
+    unchanged.
+
+    That alignment is *verified*, not assumed: the prefix is applied to the background and
+    the column count compared. A prefix that reshapes the columns (a nested
+    ``ColumnTransformer``, say) would produce attributions in a space
+    ``encoded_parents`` cannot aggregate, so such a member is explained whole by permutation
+    instead.
+
+    Args:
+        member: A fitted ensemble member, pipeline or not.
+        background: Encoded reference rows, or ``None``.
+
+    Returns:
+        ``(estimator, transform, background)``; ``transform`` is ``None`` when nothing was
+        unwrapped.
+    """
+    steps = getattr(member, "steps", None)
+    if not steps or len(steps) < 2 or background is None:
+        return member, None, background
+    final = steps[-1][1]
+    if _member_family(final) == "permutation":
+        return member, None, background
+    prefix = member[:-1]  # type: ignore[index]
+    transformed = prefix.transform(background)
+    if np.shape(transformed)[1] != np.shape(background)[1]:
+        return member, None, background
+    return final, prefix.transform, transformed
+
+
+def _member_explainer(
+    name: str, member: object, background: pd.DataFrame | None
+) -> _MemberExplainer:
+    """Build the SHAP explainer that fits ``member``, one family at a time.
+
+    ``shap`` is three algorithms, not one, and picking a single one for every member is
+    wrong in whichever direction it is picked. ``TreeExplainer`` for everything is what this
+    spine did until now, and it did not merely fail to explain a linear member — it decided
+    which models were allowed to be promoted at all, because the AutoML search marked linear
+    candidates non-portable rather than hand back a model whose ``explain()`` would raise.
+    In a measured run that discarded the best model on the board. Conversely,
+    ``shap.Explainer`` for everything selects the interventional tree path once background
+    data is present, and its additivity check then fails against the model's own output.
+
+    So the branches are explicit:
+
+    * **tree** — ``shap.TreeExplainer(member)``, **no background**. Exact, milliseconds, and
+      the reference is the fitted trees' own node cover. This is unchanged, byte for byte,
+      from the tree-only implementation this replaced.
+    * **linear** — ``shap.LinearExplainer(member, background)``. Exact and closed-form; the
+      background is what ``E[x]`` in the attribution means, so it is required.
+    * **permutation** — ``shap.PermutationExplainer`` over the member's own
+      ``predict_proba``/``predict``. Model-agnostic, so a kNN or an SVM member is
+      explainable rather than unpromotable; it pays in model evaluations for knowing
+      nothing about the estimator.
+
+    Args:
+        name: The member's name in ``named_estimators_``, quoted in errors.
+        member: The fitted member.
+        background: Encoded training rows kept by :meth:`TrustworthyModel.train`.
+
+    Returns:
+        The wrapped explainer.
+
+    Raises:
+        ValueError: When a non-tree member needs a background and the model carries none —
+            an artifact pickled before backgrounds were stored. Retrain it rather than
+            explaining it against an invented reference, which would return plausible
+            numbers that describe a distribution the model never saw.
+    """
+    estimator, transform, reference = _unwrap_member(member, background)
+    kind = _member_family(estimator)
+
+    if kind == "tree":
+        return _MemberExplainer("tree", shap.TreeExplainer(estimator), transform)
+
+    if reference is None:
+        msg = (
+            f"Ensemble member {name!r} ({type(estimator).__name__}) is explained by the "
+            f"{kind!r} SHAP branch, which states every contribution relative to a reference "
+            f"distribution — and this model carries no stored background. It was pickled "
+            f"before non-tree members were supported; retrain it so the background is "
+            f"captured alongside the fit."
+        )
+        raise ValueError(msg)
+
+    if kind == "linear":
+        return _MemberExplainer("linear", shap.LinearExplainer(estimator, reference), transform)
+
+    predict = getattr(estimator, "predict_proba", None) or getattr(estimator, "predict", None)
+    if not callable(predict):
+        msg = (
+            f"Ensemble member {name!r} ({type(estimator).__name__}) exposes neither "
+            f"predict_proba nor predict, so there is no output for a model-agnostic "
+            f"explainer to attribute."
+        )
+        raise ValueError(msg)
+    masker = shap.maskers.Independent(reference, max_samples=len(reference))
+    return _MemberExplainer("permutation", shap.PermutationExplainer(predict, masker), transform)
 
 
 def _min_calibration_rows(confidence_level: float) -> int:
@@ -272,6 +527,14 @@ class TrustworthyModel:
         empirical_coverage: The **measured** fraction of test rows whose true
             target fell inside the conformal interval / prediction set. This is
             the only coverage number that is an observation rather than a request.
+        explain_background: A small sample of **encoded training rows**, kept as the
+            reference distribution the linear and permutation SHAP branches state their
+            attributions against (see :data:`_EXPLAIN_BACKGROUND_ROWS`). Tree members
+            never touch it — their reference is the fitted trees' own node cover, and
+            handing them data switches the algorithm and breaks additivity. ``None`` on
+            an artifact pickled before non-tree members were supported, in which case a
+            non-tree member raises rather than being explained against an invented
+            reference.
     """
 
     estimator: VotingRegressor | VotingClassifier
@@ -295,6 +558,7 @@ class TrustworthyModel:
     metric_name: str | None = None
     metric_value: float | None = None
     empirical_coverage: float | None = None
+    explain_background: pd.DataFrame | None = None
 
     # ── construction ────────────────────────────────────────────────────────
     @classmethod
@@ -441,6 +705,12 @@ class TrustworthyModel:
             metric_name=metric_name,
             metric_value=metric_value,
             empirical_coverage=empirical_coverage,
+            # Drawn from the *training* rows, never from calibration or test: a SHAP
+            # background is read at explain time, and sourcing it from the split the
+            # coverage guarantee rests on would put those rows to a second use.
+            explain_background=x_train.sample(
+                n=min(_EXPLAIN_BACKGROUND_ROWS, len(x_train)), random_state=random_state
+            ),
         )
         if path is not None:
             if data_source == "synthetic":
@@ -624,10 +894,19 @@ class TrustworthyModel:
 
     # ── inference ───────────────────────────────────────────────────────────
     @cached_property
-    def _explainers(self) -> dict[str, shap.TreeExplainer]:
-        """Lazily-built SHAP ``TreeExplainer`` per ensemble member (never pickled)."""
+    def _explainers(self) -> dict[str, _MemberExplainer]:
+        """Lazily-built SHAP explainer per ensemble member (never pickled).
+
+        One explainer per member, each chosen for that member's family by
+        :func:`_member_explainer` — a tree member still gets exactly
+        ``shap.TreeExplainer(member)`` with no background, which is what it got when
+        this was the only branch.
+
+        Returns:
+            Member name → its wrapped explainer, in ``named_estimators_`` order.
+        """
         return {
-            name: shap.TreeExplainer(member)
+            name: _member_explainer(name, member, self.explain_background)
             for name, member in self.estimator.named_estimators_.items()
         }
 
@@ -777,9 +1056,10 @@ class TrustworthyModel:
     ) -> list[ShapFeature]:
         """Compute signed SHAP attributions for a single row, per **original** feature.
 
-        Each ensemble member is explained with an exact tree ``TreeExplainer`` on the
-        **encoded** row and the per-encoded-column contributions are averaged with
-        the members' (uniform) voting weights. The encoded contributions are then
+        Each ensemble member is explained on the **encoded** row by the SHAP algorithm
+        that fits its family (:func:`_member_explainer` — exact for tree and linear
+        members, model-agnostic otherwise) and the per-encoded-column contributions are
+        averaged with the members' (uniform) voting weights. The encoded contributions are then
         **aggregated back to the original features** (summing the one-hot columns of
         each categorical), so the drivers are reported per real feature — exact for
         the averaged regression output; a per-member mean over margin space for

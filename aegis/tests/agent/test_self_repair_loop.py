@@ -123,16 +123,27 @@ async def test_iteration_budget_caps_planning_rounds(make_deps):
     events = await _drive(deps, approve=False)
     types = [e["type"] for e in events]
 
-    assert deps.config.max_plan_iterations == 2
-    assert types.count("tool_call") == 2
-    assert calls["n"] == 2
+    # The budget is the OUTER bound and no longer the one that fires first. A call
+    # that fails identically every time is stopped by progress detection at three
+    # attempts, before the fourth round the budget would allow — which is the point:
+    # a budget bounds spend, it does not notice that nothing is being achieved.
+    assert deps.config.max_plan_iterations == 4
+    assert types.count("tool_call") == 3
+    assert calls["n"] == 3
 
     reflections = [e for e in events if e["type"] == "reflection"]
-    assert len(reflections) == 2
+    assert len(reflections) == 3
+    # Rounds one and two repair; round three is the one progress detection stops.
     assert reflections[0]["will_retry"] is True
-    assert reflections[1]["will_retry"] is False
-    assert reflections[1]["done"] is False
-    assert "budget exhausted" in reflections[1]["reason"]
+    assert reflections[1]["will_retry"] is True
+    assert reflections[2]["will_retry"] is False
+    assert reflections[2]["done"] is False
+
+    # And the trace says WHICH bound fired. "budget exhausted" would be a lie here —
+    # a round was still available; the loop stopped because nothing was improving.
+    checks = [e for e in events if e["type"] == "verification"]
+    assert checks[-1]["outcome"] == "OSCILLATING"
+    assert checks[-1]["repairable"] is False
     assert types[-1] == "run_finished"
 
 
@@ -151,3 +162,205 @@ async def test_larger_budget_allows_more_rounds(make_deps):
     assert types.count("tool_call") == 3
     assert calls["n"] == 3
     assert types[-1] == "run_finished"
+
+
+@pytest.mark.asyncio
+async def test_a_rail_refusal_stops_the_loop_instead_of_retrying_it(make_deps):
+    """A result the output rail refused is a decision, not a failure to repair.
+
+    ``act`` used to fold both into one ``ok=False``: the tool failed, or the tool
+    succeeded and the rail declined to let its output into the prompt. Indistinguishable
+    by ``reflect``, so both re-planned. At the old budget of two that was invisible —
+    there was never a third round to waste. Raising the budget turns it into a retry
+    loop pointed at our own guardrail, re-running the same call to be refused again for
+    the same reason, spending real tokens each time.
+
+    The tool here SUCCEEDS every time. Only the rail refuses. So a loop that retries is
+    a loop repairing something that never broke.
+    """
+    deps = make_deps(propose_tool=True, high_risk=False)
+
+    calls = {"n": 0}
+
+    async def run_tool(persona, name, args, *, actor, model, trace_id, approver):  # noqa: ANN001
+        calls["n"] += 1
+        return _Outcome(ok=True, summary="the write landed")
+
+    async def refuse_everything(text, *, tool_name, deps, writer):  # noqa: ANN001
+        return False, "[tool result withheld by the output guardrail]"
+
+    deps = dataclasses.replace(deps, run_tool=run_tool)
+
+    import aegis.agent.graph as graph_module
+
+    original = graph_module.screen_tool_result
+    graph_module.screen_tool_result = refuse_everything
+    try:
+        events = await _drive(deps, approve=False)
+    finally:
+        graph_module.screen_tool_result = original
+
+    types = [e["type"] for e in events]
+
+    # The whole point: one attempt, not a budget's worth.
+    assert calls["n"] == 1, f"the refused call was retried {calls['n']} times"
+    assert types.count("tool_call") == 1
+
+    reflections = [e for e in events if e["type"] == "reflection"]
+    assert len(reflections) == 1
+    assert reflections[0]["will_retry"] is False
+    assert reflections[0]["done"] is False
+    # And it says which of the two failures it was, so the trace is not ambiguous.
+    assert "guardrail refused" in reflections[0]["reason"]
+
+    assert types[-1] == "run_finished"
+
+
+@pytest.mark.asyncio
+async def test_an_identical_call_failing_three_times_stops_the_loop(make_deps):
+    """A budget is not a termination guarantee on its own.
+
+    A tool that fails the same way every time will consume every round it is given and
+    end with nothing to show for the spend. The bound that matters is not "how many
+    rounds are left" but "is this making progress" — three identical attempts is stuck,
+    and stopping there is the difference between a bounded loop and an expensive one.
+
+    The threshold is three rather than two on purpose: the second identical attempt is
+    the ordinary repair of a transient failure, and condemning it would refuse to fix
+    exactly the failures most worth fixing. ``test_larger_budget_allows_more_rounds``
+    pins that lower edge; this pins the upper one.
+    """
+    deps = make_deps(propose_tool=True, high_risk=False)
+    # Never succeeds. With a budget of 6 an unbounded loop would call six times.
+    run_tool, calls = _failing_run_tool(fail_first_n=99)
+    deps = dataclasses.replace(
+        deps,
+        run_tool=run_tool,
+        config=dataclasses.replace(deps.config, max_plan_iterations=6),
+    )
+
+    events = await _drive(deps, approve=False)
+    types = [e["type"] for e in events]
+
+    assert calls["n"] == 3, f"the stuck call ran {calls['n']} times, expected 3"
+
+    checks = [e for e in events if e["type"] == "verification"]
+    assert checks, "verify emitted nothing"
+    assert checks[-1]["outcome"] == "OSCILLATING"
+    assert checks[-1]["repairable"] is False
+
+    reflections = [e for e in events if e["type"] == "reflection"]
+    assert reflections[-1]["will_retry"] is False
+    assert types[-1] == "run_finished"
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_round_does_not_spend_the_repair_budget(make_deps):
+    """The arithmetic that made a failed write unretryable at the old default.
+
+    The canonical demo is read-then-write: round one looks the record up, round two
+    changes it. Counting the lookup against the repair budget meant that by the time the
+    write failed there was nothing left to repair it with — the one moment the loop
+    exists for was the one moment it could not act.
+
+    ``verify`` returns ``repair_iterations: 0`` for a round that only read.
+    """
+    deps = make_deps(propose_tool=True, high_risk=False)
+    run_tool, _ = _failing_run_tool(fail_first_n=0)
+    deps = dataclasses.replace(deps, run_tool=run_tool)
+
+    events = await _drive(deps, approve=False)
+    checks = [e for e in events if e["type"] == "verification"]
+
+    assert checks, "verify emitted nothing"
+    # Whatever the verdict, a round that reported GATHERED must not be charged as a
+    # repair round — that is the whole point of the separate counter.
+    for check in checks:
+        if check["outcome"] == "GATHERED":
+            assert check["repairable"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_read_back_tier_actually_runs_and_names_its_method(make_deps):
+    """The tier that makes this a verifier rather than a self-report.
+
+    An audit found this had never executed: the seam existed, defaulted to "nothing can
+    be read back", and no production wiring overrode it — so every write reported
+    UNVERIFIED while the commit claimed the record was being checked. A default that
+    silently disables the headline feature is worse than no feature, because the trace
+    still looks like verification happened.
+    """
+    from aegis.agent.deps import ReadBack
+
+    deps = make_deps(propose_tool=True, high_risk=False)
+
+    async def run_tool(persona, name, args, *, actor, model, trace_id, approver):  # noqa: ANN001
+        if name == "find_requests":
+            return _Outcome(ok=True, summary="R-1 status: resolved")
+        return _Outcome(ok=True, summary="updated")
+
+    deps = dataclasses.replace(
+        deps,
+        run_tool=run_tool,
+        tool_read_only=lambda n: n == "find_requests",
+        read_back_for=lambda name, args: ReadBack(
+            tool="find_requests", args={"text": "R-1"}, expect="resolved",
+            describe="R-1 now reads 'resolved'",
+        ),
+    )
+
+    events = await _drive(deps, approve=False)
+    checks = [e for e in events if e["type"] == "verification"]
+
+    assert checks, "verify emitted nothing"
+    assert checks[-1]["method"] == "read-back", (
+        f"the read-back tier did not run; method was {checks[-1]['method']!r}"
+    )
+    assert checks[-1]["outcome"] == "VERIFIED"
+    # The evidence is the record itself, not the tool's opinion of itself.
+    assert "resolved" in checks[-1]["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_write_that_did_not_land_condemns_the_round(make_deps):
+    """One unproven write is enough, and the arguments must match the right call.
+
+    Two failure modes in one test, because they compound. Returning after the first
+    successful read-back reports VERIFIED for a round whose second write silently
+    failed — the very defect this node exists to end, rebuilt one tier down. And
+    matching a write's arguments by TOOL NAME rather than call id reads the first
+    call's arguments for both, so the second is "verified" against the first's record.
+    Closing two requests in one round is the ordinary case, not an exotic one.
+    """
+    from aegis.agent.deps import ReadBack
+
+    deps = make_deps(propose_tool=True, high_risk=False)
+
+    async def run_tool(persona, name, args, *, actor, model, trace_id, approver):  # noqa: ANN001
+        if name == "find_requests":
+            # The record only ever shows R-1. R-2 never landed.
+            return _Outcome(ok=True, summary=f"{args.get('text')} status: open")
+        return _Outcome(ok=True, summary="updated")
+
+    def read_back(name, args):
+        target = str(args.get("request_id") or "")
+        return ReadBack(
+            tool="find_requests", args={"text": target}, expect="resolved",
+            describe=f"{target} now reads 'resolved'",
+        )
+
+    deps = dataclasses.replace(
+        deps,
+        run_tool=run_tool,
+        tool_read_only=lambda n: n == "find_requests",
+        read_back_for=read_back,
+    )
+
+    events = await _drive(deps, approve=False)
+    checks = [e for e in events if e["type"] == "verification"]
+
+    assert checks, "verify emitted nothing"
+    # The record says "open", so nothing may report VERIFIED.
+    assert checks[-1]["outcome"] != "VERIFIED", (
+        "a write the record does not show was reported as verified"
+    )

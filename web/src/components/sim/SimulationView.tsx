@@ -131,7 +131,7 @@ function LaneChip({
         <Icon aria-hidden className={cn('size-3.5', accent === 'agent' ? 'text-blue-700' : 'text-blue-600')} />
       </span>
       <span className="t-label min-w-0 truncate text-foreground">{title}</span>
-      <code className="hidden font-mono text-[0.66rem] text-muted-foreground sm:inline" translate="no">
+      <code className="hidden font-mono text-[0.6875rem] text-muted-foreground sm:inline" translate="no">
         {roleId}
       </code>
     </span>

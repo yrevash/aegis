@@ -279,7 +279,7 @@ export function KnowledgeGraph({
 
         {/* Caption + entity-kind legend when a run has traversed, else idle hint. */}
         <div className="pointer-events-none absolute bottom-2 left-3 flex max-w-[92%] flex-col gap-1">
-          <span className="font-mono text-[0.62rem] text-muted-foreground/70">
+          <span className="font-mono text-[0.6875rem] text-muted-foreground/70">
             {hasRun
               ? `evidence for this answer · ${state.touchedNodes.length} entit${state.touchedNodes.length === 1 ? 'y' : 'ies'} · hover to read`
               : /* A run that finished having touched nothing is a different fact from a
@@ -292,7 +292,7 @@ export function KnowledgeGraph({
           {hasRun && kindLegend.length > 0 && (
             <div className="flex flex-wrap gap-x-2.5 gap-y-1">
               {kindLegend.map((kind) => (
-                <span key={kind} className="flex items-center gap-1 font-mono text-[0.58rem] text-muted-foreground">
+                <span key={kind} className="flex items-center gap-1 font-mono text-[0.6875rem] text-muted-foreground">
                   <span
                     aria-hidden
                     className="inline-block size-2 rounded-full"

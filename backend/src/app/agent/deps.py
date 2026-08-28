@@ -368,6 +368,7 @@ class MemoryDeps:
         """
         from app.data.session import get_sessionmaker, set_tenant_scope
         from app.memory.consolidate import sweep_pending
+        from app.memory.screen import memory_write_screen
 
         async with get_sessionmaker()() as session:
             await set_tenant_scope(session, tenant_id)
@@ -377,6 +378,13 @@ class MemoryDeps:
                 complete=self.complete,
                 embed=self.embed,
                 limit=8,
+                # THE binding. Without it this call — the drain the live agent loop
+                # fires after every turn — writes extracted facts to the long-term
+                # store with no rail over them, and it beats the screened backstop
+                # sweeper every time: measured, every job drained in 20-160ms while
+                # the sweeper runs on a 60-second timer. `memory_write_log` held 28
+                # ADD rows and zero REFUSED, ever.
+                screen=memory_write_screen,
             )
 
     @classmethod
@@ -445,6 +453,11 @@ class AgentDeps(_AegisAgentDeps):
             run_tool=_default_run_tool,
             tool_risk=_default_tool_risk,
             tool_read_only=_default_tool_read_only,
+            # Without this line the verifier's read-back tier is unreachable and every
+            # write reports UNVERIFIED. The seam existed, defaulted to "nothing can be
+            # read back", and nothing overrode it — so the tier that makes the loop a
+            # verifier rather than a self-report had never executed in production.
+            read_back_for=_default_read_back_for,
             render_system_prompt=_default_render_system_prompt,
             agent_roster=_default_agent_roster,
             subagent_roster=_default_subagent_roster,
@@ -464,7 +477,7 @@ class AgentDeps(_AegisAgentDeps):
 # Default (production) bindings — imported lazily to keep agent import cheap.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_shared_store: Any = None
+_shared_stores: dict[Any, Any] = {}
 
 
 def _default_answer_cache(settings: Any) -> AnswerCache | None:  # noqa: ANN401 - Settings
@@ -505,13 +518,37 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
     *same* records, so a second store would mean a note added over MCP was invisible to
     the agent that is supposed to be looking at the same request.
     """
-    global _shared_store
-    if _shared_store is None:
+    from aegis.governance.context import get_governance_context
+
+    # Keyed by tenant, because one shared desk is a tenant-isolation hole in the one
+    # place the platform is loudest about not having one.
+    #
+    # Measured: `northwind.admin` (tenant 1) and `vertex.admin` (tenant 2) each asked
+    # for open requests and both received the **identical** 25 ids out of the identical
+    # "40 matching requests" set. Two independent auditors reached it from two different
+    # surfaces (A2A and MCP), which is what a shared process-wide global guarantees.
+    #
+    # These are synthetic demo records, so nothing real leaked — but "the isolation
+    # holds except in the data we demonstrate it with" is not a defensible sentence in
+    # front of a jury that tries two logins side by side.
+    #
+    # The per-process invariant that mattered is preserved and narrowed: there is still
+    # exactly one store PER TENANT, so the MCP front door and the agent still act on the
+    # same records for the same tenant — a note added over MCP stays visible to the
+    # agent looking at that request. `None` (platform-scoped principals, and the
+    # synchronous seams that run before any context is bound) keeps its own store rather
+    # than borrowing a tenant's.
+    ctx = get_governance_context()
+    key = getattr(ctx, "tenant_id", None) if ctx is not None else None
+
+    store = _shared_stores.get(key)
+    if store is None:
         from app.adapter import InMemoryRecordStore, generate_synthetic_sync
 
         dataset = generate_synthetic_sync()
-        _shared_store = InMemoryRecordStore.from_dataset(dataset)
-    return _shared_store
+        store = InMemoryRecordStore.from_dataset(dataset)
+        _shared_stores[key] = store
+    return store
 
 
 def shared_record_store() -> Any:  # noqa: ANN401 - adapter store type
@@ -571,6 +608,22 @@ def _default_tool_risk(tool_name: str) -> RiskLevel:
     if tool_name == LOAD_SKILL_TOOL:
         return LOAD_SKILL_RISK
     return merged_tool_risk(tool_name)
+
+
+def _default_read_back_for(tool_name: str, args: object) -> object:
+    """Bind the desk adapter's read-back table into the agent.
+
+    One line of indirection on purpose: the agent package defines the *contract*
+    (:class:`~aegis.agent.deps.ReadBack`) and the adapter owns the domain knowledge of
+    which read proves which write. Swapping the domain swaps this table and nothing else.
+
+    The import is deferred for the same reason every other adapter binding in this
+    module defers it — the adapter imports the agent contract, so a module-level import
+    here would close the cycle.
+    """
+    from app.adapter.tools import read_back_for as adapter_read_back_for
+
+    return adapter_read_back_for(tool_name, args)  # type: ignore[arg-type]
 
 
 def _default_tool_read_only(tool_name: str) -> bool:

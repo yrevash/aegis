@@ -90,7 +90,7 @@ manifest in `backend/src/app/capabilities.py`, served publicly at
 | **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Ensemble + calibrated conformal intervals + SHAP |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema, content |
-| **Aegis Evals** | RAGAS-style proxies + LLM judge | Trace-level and answer evaluation |
+| **Aegis Evals** | Deterministic proxies offline, real `ragas` metrics live | Trace-level and answer evaluation |
 | **Aegis Loop** | native | LLM-Ops self-improvement: trace → eval → diagnose → tiered release |
 | **Aegis Governance** | Postgres RLS + JWT | Multi-tenant RBAC, budgets, RLS, audit log |
 | **Aegis Trace** | OpenTelemetry → Phoenix | End-to-end glass-box tracing |
@@ -207,7 +207,8 @@ argument twice.
 | **NeMo Guardrails** | Colang rails layered over the always-on programmatic pipeline | `aegis/src/aegis/guardrails/nemo.py` |
 | **MAPIE** | Conformal intervals whose coverage is measured, not asserted | `aegis/src/aegis/ml/model.py` |
 | **SHAP** | Per-prediction drivers, so a signal can be argued with | `aegis/src/aegis/ml/model.py` |
-| **Offline eval gate** | RAGAS-style deterministic proxies — no LLM call, no `ragas` dependency | `aegis/src/aegis/evals/metrics.py` |
+| **Offline eval gate** | Deterministic lexical proxies — no LLM call, no network | `aegis/src/aegis/evals/metrics.py` |
+| **Live eval** | **Real `ragas` metrics**, every judge call metered through the Aegis gateway | `aegis/src/aegis/evals/libs/gateway_adapters.py` |
 | **OpenTelemetry + OpenInference** | GenAI semantic-convention spans across every run | `aegis/src/aegis/observability/semconv.py` |
 | **Apache Superset** | Embedded dashboards behind a guest token carrying the tenant RLS | `aegis/src/aegis/analytics/rls.py` |
 | **Postgres RLS** | `FORCE ROW LEVEL SECURITY`, and a `NOSUPERUSER NOBYPASSRLS` serving role | `aegis/src/aegis/governance/rls.py` |

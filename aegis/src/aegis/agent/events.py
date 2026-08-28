@@ -200,6 +200,39 @@ def approval_queued(
     }
 
 
+def verification(
+    *,
+    outcome: str,
+    method: str,
+    reason: str,
+    repairable: bool,
+    evidence: str = "",
+    round: int = 0,  # noqa: A002 - the wire name; this is the planning round
+) -> dict[str, Any]:
+    """Build a ``verification`` payload for one grounded check of a round's outcome.
+
+    Emitted by the ``verify`` node between ``act`` and ``reflect``. It reports what was
+    checked and *how* — which is the point of the event. ``method`` is the tier that
+    reached the verdict: ``deterministic`` (the rows decided it), ``read-back`` (a
+    read-only call proved whether the write landed) or ``unverifiable`` (nothing in this
+    deployment could confirm it, reported as such rather than assumed).
+
+    ``outcome`` is one of ``VERIFIED``, ``FAILED``, ``BLOCKED``, ``OSCILLATING``,
+    ``GATHERED`` or ``UNVERIFIED``. ``repairable`` says whether another round could
+    plausibly help: a rail refusal and a repeated call are both failures that retrying
+    cannot fix, and saying so on the wire is what stops the console implying otherwise.
+    """
+    return {
+        "type": "verification",
+        "outcome": outcome,
+        "method": method,
+        "reason": reason,
+        "repairable": repairable,
+        "evidence": evidence,
+        "round": round,
+    }
+
+
 def reflection(
     *,
     iteration: int,
@@ -269,7 +302,12 @@ def agent_status(
     Emitted by :func:`aegis.agent.subagent.run_subagent` through its own scoped writer,
     so a fan-out produces interleaved beats from every concurrent lane. ``status`` is
     one of ``started`` | ``thinking`` | ``acting`` | ``done`` | ``failed`` | ``timeout``
-    — and ``timeout`` is a **designed** terminal state, not an error.
+    | ``ceiling`` — and the last two are **designed** terminal states, not errors.
+
+    ``ceiling`` was missing from this list and from the wire for a release. A lane cut
+    at its trajectory ceiling emitted ``done``, so the console drew a truncated lane
+    exactly like a complete one, and the only record of the truncation lived in a field
+    nothing rendered.
     """
     return {
         "type": "agent_status",

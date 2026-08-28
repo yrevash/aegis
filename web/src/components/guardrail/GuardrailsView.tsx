@@ -40,6 +40,7 @@ import { LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
 import { nemoState, postureAbsence } from '@/components/guardrail/postureState'
+import { RailFiringLine } from '@/components/guardrail/RailFiringLine'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 
@@ -711,6 +712,7 @@ function PostureCoverage({
     <DataPanel
       eyebrow="GET /security/posture"
       title="OWASP coverage"
+      collapsible
       maxHeight={440}
       actions={
         <InfoTip label="How coverage status is decided">
@@ -871,6 +873,12 @@ function GuardrailsView(): ReactElement {
         }
       />
 
+      {/* The rails, doing it — real payloads from the stored battery against the real
+          input rail, one at a time. It leads because every panel below it describes the
+          pipeline, and this one runs it. `INPUT_RAILS` is passed rather than re-declared
+          so a verdict's `layer` is named by the same rail card the reader scrolls to. */}
+      <RailFiringLine rails={INPUT_RAILS} />
+
       <RedteamHero report={redteam} loading={redteamLoading} platformWide={platformWide} />
 
       {redteam ? <RedteamCharts report={redteam} /> : null}
@@ -878,7 +886,7 @@ function GuardrailsView(): ReactElement {
       <PostureCoverage posture={posture} platformWide={platformWide} />
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-2">
-        <Card className="min-w-0 rounded-lg">
+        <Card collapsible className="min-w-0 rounded-lg">
           <CardBody className="min-w-0">
             <RailStack
               title="Input rails"
@@ -888,7 +896,7 @@ function GuardrailsView(): ReactElement {
             />
           </CardBody>
         </Card>
-        <Card className="min-w-0 rounded-lg">
+        <Card collapsible className="min-w-0 rounded-lg">
           <CardBody className="min-w-0">
             <RailStack
               title="Output rails"

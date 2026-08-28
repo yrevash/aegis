@@ -231,6 +231,7 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
       <DataPanel
         eyebrow="SBOM · resolved pins"
         title="The resolved inventory"
+        collapsible
         maxHeight={620}
         actions={
           <Badge tone="neutral" className="gap-1.5">
@@ -356,7 +357,7 @@ function Stat({
       {hint && (
         <p
           className={cn(
-            'mt-0.5 font-mono text-[0.62rem]',
+            'mt-0.5 font-mono text-[0.6875rem]',
             tone === 'warn' ? 'text-risk-ink' : tone === 'ok' ? 'text-ok-ink' : 'text-muted-foreground',
           )}
         >

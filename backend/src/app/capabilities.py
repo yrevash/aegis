@@ -148,7 +148,7 @@ AEGIS_MODULES: list[AegisModule] = [
     AegisModule(
         key="evals",
         name="Aegis Evals",
-        tech="RAGAS-style proxies + LLM judge",
+        tech="Real ragas + deterministic proxies + LLM judge",
         summary="Trace-level and answer evaluation of each run.",
         category="trust",
         module_path="app.eval.harness",

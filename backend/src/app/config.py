@@ -8,8 +8,27 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# `.env` is loaded into `os.environ` HERE, at the earliest point any backend module
+# runs, and the reason is a bug rather than a preference.
+#
+# pydantic-settings reads `.env` into this module's Settings object without touching
+# `os.environ`. But `import litellm` calls `load_dotenv()` as a side effect, so the
+# process environment gains every `.env` key the first time anything imports litellm —
+# which happens lazily, on whichever request path gets there first.
+#
+# Anything reading `os.environ` therefore saw one answer before that import and a
+# different one after. `aegis.gateway.routing._routed_default` reads `MODEL_<ROLE>` that
+# way, so the AgBOM's model inventory changed shape mid-process: the same pid served six
+# models at 10:20 and four different ones at 10:35. A buyer diffing two inventories from
+# one deployment would have seen a fleet change that never happened.
+#
+# Loading it once here removes the window. `override=False` so a real environment
+# variable still beats the file, which is the precedence every deployment expects.
+load_dotenv(override=False)
 
 # The non-secret dev fallback JWT signing key. It is deliberately long enough to
 # clear PyJWT's minimum-key-length warning on the offline/test path, but it must
@@ -398,6 +417,24 @@ class Settings(BaseSettings):
     # test/offline path stays quiet, but it is explicitly non-secret.
     jwt_secret: str = Field(default=DEFAULT_JWT_SECRET)
     jwt_algorithm: str = Field(default="HS256")
+    #: The externally reachable origin this deployment publishes as its own identity,
+    #: e.g. ``https://aegis.example``. Used ONLY by the A2A agent card.
+    #:
+    #: It must come from configuration and never from the request. Deriving it from the
+    #: ``Host`` header let an attacker send ``Host: evil.com`` and receive a card, signed
+    #: with this platform's real key, whose interface URL and whose ``jku`` inside the
+    #: signed header both pointed at the attacker — so Aegis's own signature certified a
+    #: document instructing peers to send their bearer tokens somewhere else, cacheable
+    #: for five minutes.
+    #:
+    #: Empty means "this deployment does not know its own public identity", and the card
+    #: is then served UNSIGNED rather than signed over a guess.
+    #:
+    #: Named ``origin`` rather than ``base_url`` deliberately: the residency inventory
+    #: treats a ``*_base_url`` field as a network DESTINATION this platform sends data
+    #: to, and this is the opposite — it is where this deployment says it *is*. Nothing
+    #: is ever sent here. The suffix convention was right to ask.
+    a2a_public_origin: str = Field(default="")
     # Access-token lifetime in minutes.
     jwt_expire_minutes: int = Field(default=720)
 

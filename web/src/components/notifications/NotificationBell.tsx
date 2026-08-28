@@ -157,7 +157,7 @@ export function NotificationBell(): ReactElement {
         {unread > 0 ? (
           <span
             aria-hidden
-            className="absolute -top-1 -right-1 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-primary px-1 font-mono text-[0.65rem] leading-[1.15rem] font-medium text-primary-foreground"
+            className="absolute -top-1 -right-1 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-primary px-1 font-mono text-[0.6875rem] leading-[1.15rem] font-medium text-primary-foreground"
           >
             {badgeCount(unread)}
           </span>
@@ -196,7 +196,7 @@ export function NotificationBell(): ReactElement {
             </h2>
             <span
               className={cn(
-                'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[0.65rem] font-medium',
+                'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium',
                 feed.status === 'live'
                   ? 'bg-ok/15 text-ok-ink'
                   : feed.status === 'retrying' || feed.status === 'connecting'
@@ -286,7 +286,7 @@ export function NotificationBell(): ReactElement {
                             answer to "where does this go" is that it goes to a screen
                             this account does not have — one line, in the row. */}
                         {target.kind === 'elsewhere' ? (
-                          <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[0.65rem] text-muted-foreground">
+                          <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
                             <Lock className="size-3 shrink-0" aria-hidden />
                             {target.label} is not on your portal
                           </span>
@@ -299,7 +299,7 @@ export function NotificationBell(): ReactElement {
                         {isUnread ? (
                           <span aria-hidden className="size-1.5 rounded-full bg-primary" />
                         ) : null}
-                        <Figure className="text-[0.68rem] text-muted-foreground">
+                        <Figure className="text-[0.6875rem] text-muted-foreground">
                           {relativeAge(row.created_at, now)}
                         </Figure>
                       </span>
@@ -371,7 +371,7 @@ export function NotificationBell(): ReactElement {
               )}
               Sound
             </button>
-            <Figure className="text-[0.68rem] text-muted-foreground">
+            <Figure className="text-[0.6875rem] text-muted-foreground">
               {unread} unread
             </Figure>
           </div>

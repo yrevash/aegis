@@ -555,7 +555,7 @@ function CacheTrafficBars({
             <span className="min-w-0 truncate text-[0.8125rem] text-foreground">{row.name}</span>
             <div className="relative h-3.5 rounded-sm bg-surface-2">
               {row.lookups === 0 ? (
-                <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[0.68rem] text-muted-foreground italic">
+                <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[0.6875rem] text-muted-foreground italic">
                   no lookups yet
                 </span>
               ) : (
@@ -577,7 +577,7 @@ function CacheTrafficBars({
             <span className="flex w-32 items-baseline justify-end gap-2">
               <Figure className="text-muted-foreground">{count(row.lookups)}</Figure>
               {row.hit_rate === null ? (
-                <span className="text-[0.68rem] text-muted-foreground italic">no rate</span>
+                <span className="text-[0.6875rem] text-muted-foreground italic">no rate</span>
               ) : (
                 <Figure className="font-semibold text-foreground">
                   {PERCENT_0.format(row.hit_rate)}

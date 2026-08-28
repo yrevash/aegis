@@ -138,8 +138,15 @@ logger = logging.getLogger(__name__)
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-SERVER_NAME = "tcs-adapter-tools"
-"""MCP server name advertised to clients."""
+SERVER_NAME = "aegis-adapter-tools"
+"""MCP server name advertised to clients.
+
+Was ``tcs-adapter-tools``. A platform whose central claim is that it is
+**domain-agnostic** — one adapter layer swapped for a new problem — should not hand
+every MCP client that connects to it the name of one particular customer. The value is
+minted into an ``iss`` claim and never validated against, so the rename carries no
+compatibility cost.
+"""
 
 SERVER_VERSION = "2.0.0"
 """MCP server version advertised to clients (2.x == Streamable HTTP + RBAC)."""
@@ -1248,6 +1255,20 @@ async def execute_approved_proposal(
         )
         return False
 
+    # `Role.ADMIN` here is a KNOWN over-attribution, and it is bounded.
+    #
+    # What it does NOT do is widen what may run: the persona allowlist is re-checked
+    # immediately above, against the persona on the row, and an action the persona may
+    # no longer call is refused before this line. Tool authority comes from that check.
+    #
+    # What it DOES affect is which budget applies, because `GovernanceContext.role`
+    # feeds limit resolution — so an approved action resolves against admin limits
+    # rather than the requester's, and a tighter per-user cap would not bind it. The
+    # tenant is correct (`row.tenant_id`), so the spend lands in the right tenant.
+    #
+    # The fix needs the requester's real role, and the row carries only `requested_by`
+    # (a `users.id`), so it means a lookup on the execution path. Recorded rather than
+    # guessed at.
     governance = GovernanceContext(tenant_id=row.tenant_id, role=Role.ADMIN)
     token = set_governance_context(governance)
     try:

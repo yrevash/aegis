@@ -1,9 +1,9 @@
 'use client'
 
-import { AlertTriangle, Copy, Download, ScrollText } from 'lucide-react'
+import { AlertTriangle, Copy, Download, ScrollText, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
-import { getAudit, getTenants } from '@/lib/api/client'
+import { getAudit, getTenants, verifyAuditChain } from '@/lib/api/client'
 import { apiMessage, errorSentence, statusOf } from '@/lib/api/apiError'
 import { startReportDownload } from '@/lib/api/reports'
 import { AuditFilterBar } from '@/components/audit/AuditFilterBar'
@@ -16,6 +16,9 @@ import {
   type AuditQuery,
 } from '@/components/audit/query'
 import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
+import { Figure } from '@/components/primitives/Figure'
+import type { AuditChainResponse } from '@/lib/api/types'
 import { AuditInsights } from '@/components/audit/AuditInsights'
 import { DataPanel } from '@/components/ui/DataPanel'
 import { InfoTip } from '@/components/primitives/InfoTip'
@@ -118,6 +121,28 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
     })
   }
 
+  /*
+   * The chain walk. Deliberately a button rather than something that runs on mount:
+   * it reads every row in the tenant's trail, and a screen that silently does that on
+   * every visit is a screen somebody eventually turns off.
+   */
+  const [chain, setChain] = useState<AuditChainResponse | null>(null)
+  const [chainError, setChainError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const runVerify = async (): Promise<void> => {
+    setChecking(true)
+    setChainError(null)
+    try {
+      setChain(await verifyAuditChain(token))
+    } catch (error) {
+      setChain(null)
+      setChainError(errorSentence(error, 'The chain could not be walked.'))
+    } finally {
+      setChecking(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {/*
@@ -131,6 +156,49 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
         `components/audit/`, but its mount point is this file, which belonged to a
         different lane. Finished and invisible is not finished.
       */}
+      <Card className="rounded-lg">
+        <CardBody className="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <button
+            type="button"
+            onClick={() => void runVerify()}
+            disabled={checking}
+            className="inline-flex h-11 shrink-0 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <ShieldCheck className="size-4" aria-hidden />
+            {checking ? 'Walking the chain…' : 'Verify the chain'}
+          </button>
+          {chainError !== null ? (
+            <p className="min-w-0 text-sm text-block-ink">{chainError}</p>
+          ) : chain === null ? (
+            <p className="min-w-0 text-sm text-muted-foreground">
+              Every row is hashed with its predecessor&rsquo;s hash mixed in, so an edited
+              row breaks itself and a removed one breaks everything after it.
+            </p>
+          ) : (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+              <Badge tone={chain.intact ? 'ok' : 'block'}>
+                {chain.intact ? 'chain intact' : `broken at #${chain.broken_at ?? '?'}`}
+              </Badge>
+              <Figure className="tabular text-sm text-foreground">{chain.checked}</Figure>
+              <span className="text-sm text-muted-foreground">verified</span>
+              {chain.unchained > 0 && (
+                <>
+                  <Figure className="tabular text-sm text-foreground">
+                    {chain.unchained}
+                  </Figure>
+                  {/* Never folded into the verdict: nothing can be proved about rows
+                      written before the chain existed, and saying otherwise would be
+                      the overclaim this panel exists to retire. */}
+                  <span className="text-sm text-muted-foreground">
+                    predate the chain, not covered
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
       <AuditInsights
         rows={rows}
         loading={load.status === 'loading'}
@@ -308,7 +376,7 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
       // `--blue-700`, not `--blue-600`: this is 11px text on a tinted wash, where
       // blue-600 measures 4.12:1 and fails AA (DESIGN.md §2). The 600 step is a fill,
       // a border and a focus ring — never a small-text step.
-      className="group inline-flex touch-manipulation items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-700 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex touch-manipulation items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.6875rem] text-blue-700 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Copy trace id"
     >
       {traceId}

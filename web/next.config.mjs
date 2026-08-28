@@ -3,6 +3,27 @@ const nextConfig = {
   reactStrictMode: true,
 
   /**
+   * The dev proxy's own 30-second ceiling was failing the demo.
+   *
+   * Next's rewrite proxy defaults to `proxyTimeout: 30_000`, and it applies to the
+   * rewrites below. `POST /v1/evals/live-run` is LLM-judged: measured backend-side
+   * durations for the same route span **14 s → 32 s → 134 s** depending on provider
+   * latency and load. Measured through this origin against a cold backend, two
+   * consecutive presses returned **HTTP 500 at t=30.007s and t=30.016s**, while the
+   * same request warm returned 200 at t=15s.
+   *
+   * So the button was a coin-flip on the first press after a restart — exactly the demo
+   * scenario — and the failure mode is the bad one: the proxy gives up, the browser
+   * shows "could not run", and **the backend keeps running and keeps spending**.
+   *
+   * 180 s clears the worst measured case with room. This is a dev-server concern only;
+   * production serves the API from its own origin and never passes through here.
+   */
+  experimental: {
+    proxyTimeout: 180_000,
+  },
+
+  /**
    * No gzip from the Next server — because it was eating the whole event stream.
    *
    * Measured, not guessed. The same `POST /v1/query` through this origin:
@@ -71,6 +92,12 @@ const nextConfig = {
     const api = process.env.AEGIS_DEV_API_ORIGIN || 'http://127.0.0.1:8110'
     return [
       { source: '/v1/:path*', destination: `${api}/v1/:path*` },
+      // A2A discovery. The spec fixes these paths at the ROOT and registers them with
+      // IANA, so they cannot live under `/v1` — which also means the `/v1/:path*` rule
+      // above never matched them. The Interop screen probed the card, got the Next dev
+      // server's own 404, and honestly reported "no answer" for an endpoint the backend
+      // was serving correctly all along.
+      { source: '/.well-known/:path*', destination: `${api}/.well-known/:path*` },
       { source: '/health', destination: `${api}/health` },
       { source: '/ready', destination: `${api}/ready` },
       { source: '/readyz', destination: `${api}/readyz` },

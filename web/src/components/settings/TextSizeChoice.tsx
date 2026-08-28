@@ -73,7 +73,7 @@ export function TextSizeChoice({
                   A
                 </span>
                 {dense ? null : (
-                  <Figure className="text-[0.6rem] leading-none">{step.percent}%</Figure>
+                  <Figure className="text-[0.6875rem] leading-none">{step.percent}%</Figure>
                 )}
               </span>
               <span className="sr-only">

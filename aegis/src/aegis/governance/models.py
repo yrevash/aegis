@@ -224,6 +224,15 @@ class AuditLog(AegisBase):
 
     Every autonomous action, the approving human (if any), the model used and the
     trace id are captured here — this is what makes the system defensible.
+
+    **``ts`` is supplied by the writing process, not by the database.** It has to be:
+    it is part of the hashed serialisation, and ``func.now()`` assigns a value only
+    after the app has already had to compute the hash. The honest cost is that ``ts``
+    means "the writing process's clock" rather than "the database's clock", so on a
+    multi-host deployment two hosts' audit timestamps can disagree by their clock skew.
+    The chain itself does not care — its order is ``prev_hash``, not ``ts`` — but the
+    read path's ``ORDER BY ts DESC`` does, and this is written down here so it is not
+    rediscovered as a bug.
     """
 
     __tablename__ = "audit_log"
@@ -235,7 +244,19 @@ class AuditLog(AegisBase):
     # table; ``reconcile_additive_columns`` deliberately does not install indexes on
     # pre-existing columns, so a database that predates this line needs the index
     # created once by hand.
-    __table_args__ = (Index("ix_audit_log_tenant_ts", "tenant_id", text("ts DESC")),)
+    # The unique index is what turns a fork into an error rather than a silent branch.
+    # Two rows in one tenant's chain cannot both claim the same predecessor, so an
+    # attempt to splice history fails at insert time instead of being discovered months
+    # later by a verifier. PostgreSQL treats NULLs as distinct in a unique index, so
+    # every pre-chain row (all `prev_hash IS NULL`) coexists freely — which is exactly
+    # what is wanted, and the reason not to reach for NULLS NOT DISTINCT.
+    #
+    # This one IS installed by `reconcile_additive_columns` because it is declared on
+    # newly added columns; `ix_audit_log_tenant_ts` is not, for the reason above.
+    __table_args__ = (
+        Index("ix_audit_log_tenant_ts", "tenant_id", text("ts DESC")),
+        Index("ux_audit_log_chain", "tenant_id", "prev_hash", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # The owning tenant for cross-tenant isolation of the trail. Additive and nullable
@@ -251,3 +272,15 @@ class AuditLog(AegisBase):
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
     approved_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    #: SHA-256 over this row's canonical serialisation, seeded with its predecessor's
+    #: ``row_hash``. NULL means this row predates the chain — a state we must be able to
+    #: say out loud, because nothing can prove anything about history nobody hashed.
+    row_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    #: The predecessor's ``row_hash`` in this tenant's chain, or the genesis marker on
+    #: the first chained row. NULL on every pre-chain row.
+    #:
+    #: Chains are PER TENANT, not global: `GET /audit` is tenant-scoped, so a global
+    #: chain would mean a tenant admin could not verify their own trail without being
+    #: handed other tenants' rows. Platform-scoped rows (`tenant_id IS NULL`) form their
+    #: own chain.
+    prev_hash: Mapped[str | None] = mapped_column(String(64), default=None)

@@ -140,7 +140,7 @@ function DiffBody({ base, target }: { base: DiffSide; target: DiffSide }): React
   return (
     <pre
       translate="no"
-      className="overflow-auto rounded-lg border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed"
+      className="overflow-auto rounded-lg border border-border bg-surface-2/40 p-3 font-mono text-[0.6875rem] leading-relaxed"
     >
       {lines.map((line, i) => (
         <div

@@ -127,7 +127,7 @@ export function ActivityRail({
                       {entry.stage.chain.map((layer) => (
                         <span
                           key={layer}
-                          className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.62rem] text-muted-foreground"
+                          className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground"
                         >
                           {layer}
                         </span>

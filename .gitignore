@@ -123,3 +123,15 @@ testdata/audit/
 .screenshots-*/
 .shots/
 .console-shots/
+
+# Qdrant's on-disk database and the local run logs. Runtime state, not source.
+# 146MB of segment files reached a commit through `git add -A`; the collections are
+# rebuilt by `python -m app.ingestion --reindex --backfill-graph`, so nothing here is
+# worth carrying and everything here churns on every write.
+storage/
+.runlogs/
+.qdrant-initialized
+
+# Locally recorded demo video — regenerate with web/demo-record.mjs, never commit.
+.demo/
+web/demo-record.mjs

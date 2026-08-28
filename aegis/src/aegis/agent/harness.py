@@ -69,9 +69,26 @@ _KNOB_SPECS: tuple[_KnobSpec, ...] = (
     _KnobSpec(
         "max_plan_iterations",
         "int",
-        "Hard cap on planning rounds — guarantees termination. 1 = single linear pass; "
-        "the default 2 allows one re-plan.",
+        "Outer cap on planning rounds — guarantees termination. 1 = single linear pass; "
+        "the default 4 covers read, write, repaired write and one round of slack. "
+        "It is the OUTER bound: progress detection stops a stuck run sooner.",
         minimum=1,
+    ),
+    _KnobSpec(
+        "max_trajectory_tokens",
+        "int",
+        "Ceiling on one lane's trajectory before its next model call. Aegis has no "
+        "trajectory compaction, so this is the bound that stands in for it.",
+        minimum=2000,
+        maximum=200000,
+    ),
+    _KnobSpec(
+        "max_tool_result_tokens",
+        "int",
+        "Ceiling on one tool result's contribution to a trajectory. The bound that "
+        "bites first: the real exposure is one unbounded result, not a long chat.",
+        minimum=500,
+        maximum=50000,
     ),
     _KnobSpec(
         "query_rewrite_enabled",

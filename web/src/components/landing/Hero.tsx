@@ -6,6 +6,7 @@ import type { ReactElement } from 'react'
 import { Receipt } from '@/components/primitives/Receipt'
 
 import { useCapabilities } from './useCapabilities'
+import { RevealGroup } from '@/components/shared/RevealGroup'
 
 /**
  * The opening claim, and — beside it — proof that this page is wired to something.
@@ -29,7 +30,13 @@ export function Hero(): ReactElement {
   return (
     <section className="bg-background">
       <div className="mx-auto grid max-w-6xl gap-x-16 gap-y-10 px-4 pt-14 pb-14 sm:px-6 sm:pt-20 sm:pb-16 lg:grid-cols-[minmax(0,8fr)_minmax(0,4fr)] lg:items-end">
-        <div className="min-w-0">
+        {/* M1 "Arrive" — the one GSAP motion in the system, and the only place on this
+            page that gets it. Above the fold, first mount only, four siblings staggered
+            40ms apart. Everything below the fold uses `RevealOnScroll`, which is an
+            IntersectionObserver that fails safe; GSAP earns its place here and nowhere
+            else on this page because a staggered entrance across siblings is the one
+            thing CSS `animation-delay` genuinely does badly. */}
+        <RevealGroup className="min-w-0">
           <p className="eyebrow mb-6">Enterprise agentic AI · domain-agnostic · multi-tenant</p>
           <h1 className="t-hero max-w-[15ch] text-balance text-foreground">
             Autonomy you can audit.
@@ -55,7 +62,7 @@ export function Hero(): ReactElement {
               Follow one run
             </a>
           </div>
-        </div>
+        </RevealGroup>
 
         <BackendState />
       </div>

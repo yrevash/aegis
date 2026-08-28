@@ -66,7 +66,7 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
             : 'border-border bg-surface-2/60',
       )}
     >
-      <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[0.68rem]">
+      <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[0.6875rem]">
         <span className="shrink-0 font-medium text-foreground">{tool.tool}</span>
         <span className="truncate text-muted-foreground">({argPreview(tool.args)})</span>
         <span
@@ -79,7 +79,7 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
         </span>
       </div>
       {detail !== null && (
-        <p className="text-[0.68rem] leading-snug text-muted-foreground">{detail}</p>
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">{detail}</p>
       )}
     </li>
   )
@@ -124,7 +124,7 @@ function LaneThinking({
         >
           <span
             aria-hidden
-            className="tabular mt-px shrink-0 font-mono text-[0.62rem] text-muted-foreground/70"
+            className="tabular mt-px shrink-0 font-mono text-[0.6875rem] text-muted-foreground/70"
           >
             {index + 1}
           </span>
@@ -224,7 +224,7 @@ function LaneDetail({
       {(bill || showVerdict) && (measured !== null || lane.contributed !== null) && (
         <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
           {bill && measured !== null && (
-            <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
+            <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
               {measured}
             </span>
           )}
@@ -373,7 +373,7 @@ function LaneRosterRow({
           <span className="sr-only">{lane.status}</span>
         )}
         {bill !== null && (
-          <span className="tabular shrink-0 font-mono text-[0.68rem] text-muted-foreground">
+          <span className="tabular shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
             {bill}
           </span>
         )}
@@ -455,11 +455,19 @@ function laneHeading(state: RunState, attributed: boolean, count: number): strin
  * it is the receipt. A team whose lanes have not checked in yet is simply **early**. The
  * degraded sentence is for what is left: a run that finished without ever stamping an
  * identity, which is the only case where the panel really is showing less than happened.
+ *
+ * That last distinction was being thrown away at t=0. `routing` is null until the router
+ * runs, and the input rail takes about three seconds before it — so **every** run,
+ * including every team run, opened by saying it had reported no per-agent identity. The
+ * sentence was a lie for the first five seconds of the demo. A run that has not routed
+ * yet has not failed to report anything; it is being sized.
  */
 function laneSentence(state: RunState): string {
   const routing = state.routing
   if (routing === null) {
-    return 'This run reported no per-agent identity, so it reads as one lane.'
+    return state.running || state.events.length === 0
+      ? 'Sizing the run — the router has not named a width yet.'
+      : 'This run reported no per-agent identity, so it reads as one lane.'
   }
   if (routing.depth !== 'team') {
     return `Sized for one agent — ${routing.decided_by} chose a single lane for this question, and it ran the whole turn.`

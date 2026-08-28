@@ -87,7 +87,7 @@ export function ControlLadder({
                 </span>
                 <span
                   className={cn(
-                    'font-mono text-[0.68rem] uppercase tracking-wide',
+                    'font-mono text-[0.6875rem] uppercase tracking-wide',
                     chrome.ink,
                   )}
                 >

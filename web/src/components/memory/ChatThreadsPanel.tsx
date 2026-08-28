@@ -159,7 +159,13 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
       )}
 
       {sessions != null && sessions.length > 0 && (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <ul
+          className="relative min-w-0 divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border"
+          style={{ maxHeight: 420 }}
+          tabIndex={0}
+          role="group"
+          aria-label="Chats"
+        >
           {sessions.map((row) => (
             <li key={row.id} className="px-3 py-2.5">
               {renamingId === row.id ? (
@@ -249,7 +255,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                     <span className="block truncate text-sm text-foreground">{row.title}</span>
                     <span
                       translate="no"
-                      className="tabular block truncate font-mono text-[0.68rem] text-muted-foreground"
+                      className="tabular block truncate font-mono text-[0.6875rem] text-muted-foreground"
                     >
                       {row.last_active_at != null ? formatAgo(row.last_active_at) : '—'} ·{' '}
                       {row.id.slice(0, 8)}

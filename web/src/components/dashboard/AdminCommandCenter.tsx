@@ -524,7 +524,7 @@ function AdminCommandCenter(): ReactElement {
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-foreground">{t.name}</p>
-                          <p className="font-mono text-[0.68rem] text-muted-foreground">
+                          <p className="font-mono text-[0.6875rem] text-muted-foreground">
                             {fmtInt(b?.calls ?? null)} calls
                           </p>
                         </div>
@@ -533,7 +533,7 @@ function AdminCommandCenter(): ReactElement {
                         <div className="w-28 shrink-0 sm:w-40">
                           <div className="flex items-baseline justify-between gap-2">
                             <span className="tabular text-sm text-foreground">{fmtUsd(spent)}</span>
-                            <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
+                            <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
                               / {cap != null ? fmtUsd(cap) : 'no cap'}
                             </span>
                           </div>

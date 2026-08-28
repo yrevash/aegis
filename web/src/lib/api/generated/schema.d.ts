@@ -108,6 +108,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/a2a": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A2A Rpc
+         * @description The A2A JSON-RPC endpoint — `SendMessage` and `GetTask`.
+         *
+         *     **Authenticated, and scoped by the token alone.** The `tenant` routing field in the
+         *     request body is attacker-controlled and arrives before authentication; it selects
+         *     which agent is addressed and never sets the database tenant scope. When it disagrees
+         *     with the token, this refuses rather than reconciling — reconciling would mean
+         *     silently honouring one of them, and whichever one you honour, a caller has learned
+         *     something about the other.
+         */
+        post: operations["a2a_rpc_v1_a2a_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/about": {
         parameters: {
             query?: never;
@@ -689,6 +716,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audit Verify
+         * @description Walk the audit chain and report the first break, if any.
+         *
+         *     This is the difference between "append-only because a grant says so" and
+         *     "append-only, and here is how you check". Every row is hashed with its predecessor's
+         *     hash mixed in, so editing a row breaks that row and **removing** one breaks
+         *     everything after it — the quieter attack, and the one a per-row hash cannot see.
+         *
+         *     Scoped exactly like ``GET /audit``: a tenant-bound caller verifies its own chain, a
+         *     platform admin may name a tenant. Chains are per tenant precisely so this answer is
+         *     reachable without handing anybody another tenant's rows.
+         *
+         *     ``unchained`` is reported separately and never folded into ``intact``. Rows written
+         *     before the chain existed carry no hash, and nothing can prove anything about history
+         *     nobody hashed — a green tick covering them would be the overclaim this endpoint
+         *     exists to retire.
+         *
+         *     Args:
+         *         tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name
+         *             its own.
+         *         auth: The authenticated admin/devops principal; the sole source of the scope.
+         */
+        get: operations["audit_verify_v1_audit_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1000,6 +1066,50 @@ export interface paths {
         get: operations["get_ingest_progress_v1_documents__document_id__ingest_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/evals/live-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evals Live Run
+         * @description Score the seed corpus with the real Ragas metrics (admin/ai_team).
+         *
+         *     A POST and not a GET, and not memoised, because this **spends money**: every metric
+         *     is LLM-judged and answer relevancy also embeds. ``GET /evals/report`` stays the cheap
+         *     deterministic rollup a dashboard may poll; conflating them would turn a page refresh
+         *     into a budget event.
+         *
+         *     Every judge call goes through :func:`aegis.gateway.complete` rather than at an API
+         *     directly, so it is budget-checked, rate-limited, traced and written to the usage
+         *     ledger. That is the difference between using the library and using it honestly: an
+         *     evaluation subsystem whose spend the cost surface cannot see would be the one place
+         *     this platform's metering claim is false.
+         *
+         *     **That sentence was false for a release, and the route was the hole.** The adapters
+         *     do call the gateway, but this route bound no :class:`GovernanceContext`, so every
+         *     call ran with ``ctx=None``: no budget check, no tenant attribution, no ledger row.
+         *     Measured before the fix — seven invocations, ~108 model calls, ~$0.088 spent, **zero
+         *     rows in usage_ledger**. The claim was rendered to the reader on the evals screen and
+         *     in the API response while it was untrue, which is worse than not making it. The
+         *     binding below is the whole fix, and ``test_live_run_is_metered`` is why it cannot
+         *     silently come undone again.
+         *
+         *     Args:
+         *         limit: Seed cases to score. Small by default — each is several model calls.
+         *         auth: The authenticated admin/ai_team principal.
+         */
+        post: operations["evals_live_run_v1_evals_live_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2613,6 +2723,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/platform/agbom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Platform Agbom
+         * @description The Agent Bill of Materials — every tool, model and rail this agent is made of.
+         *
+         *     The dependency SBOM at ``GET /stack/sbom`` answers "what packages is this built
+         *     from". This answers the question a package manifest cannot: **what can this agent
+         *     do**. Which tools exist and at what risk tier, which model deployments answer which
+         *     role, which guard stages screen the traffic.
+         *
+         *     That distinction is why the March 2026 litellm compromise is the right thing to point
+         *     at. Pinning dependencies is necessary and it is not an inventory, and "we are clean"
+         *     was, until this endpoint, a claim nobody outside could check.
+         *
+         *     CycloneDX 1.6 so a buyer's existing scanner reads it. One deliberate divergence from
+         *     the OWASP AOS example is documented in :mod:`app.platform.agbom`: tools are emitted as
+         *     ``application`` because ``tool`` is not a CycloneDX component type, and a document
+         *     that fails validation defeats the point of using a standard format.
+         *
+         *     Served as ``application/vnd.cyclonedx+json``, the media type registered for this
+         *     format — the same one the sibling dependency SBOM already returns. A CycloneDX
+         *     document served as generic ``application/json`` is one a content-negotiating scanner
+         *     has no reason to recognise, which undoes the entire argument for choosing a standard
+         *     format over a bespoke one.
+         *
+         *     Args:
+         *         auth: The authenticated admin/devops principal.
+         */
+        get: operations["platform_agbom_v1_platform_agbom_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/platform/caches": {
         parameters: {
             query?: never;
@@ -4062,9 +4215,14 @@ export interface components {
          * @description One sub-agent's lifecycle beat in a concurrent fan-out (additive).
          *
          *     Emitted by each lane of the multi-agent team through its own scoped writer, so a
-         *     fan-out produces interleaved beats from every agent running at once. ``timeout`` is
-         *     a **designed** terminal state, not an error: the run degrades gracefully, names the
-         *     omitted agent in the ``synthesis`` event, and finishes.
+         *     fan-out produces interleaved beats from every agent running at once. ``timeout`` and
+         *     ``ceiling`` are **designed** terminal states, not errors: the run degrades
+         *     gracefully, names the affected agent in the ``synthesis`` event, and finishes.
+         *
+         *     They are not interchangeable. ``timeout`` is a lane that ran out of wall clock with
+         *     nothing to show; ``ceiling`` is a lane that ran out of trajectory and whose partial
+         *     findings **do** reach the answer. Collapsing the two would tell a reader that a
+         *     truncated-but-useful lane contributed nothing.
          */
         AgentStatus: {
             /**
@@ -4100,7 +4258,7 @@ export interface components {
             seq: number;
             /**
              * Status
-             * @description queued | started | thinking | acting | done | failed | timeout — the lane's current state.
+             * @description queued | started | thinking | acting | done | failed | timeout | ceiling — the lane's current state.
              */
             status: string;
             /**
@@ -4667,6 +4825,47 @@ export interface components {
              * @description The model's reading of the image, or '' if blocked.
              */
             summary: string;
+        };
+        /**
+         * AuditChainResponse
+         * @description The result of walking one tenant's audit chain.
+         *
+         *     ``intact`` is a statement about the **checked** rows only. ``unchained`` counts rows
+         *     written before the chain existed; they carry no hash, nothing can prove anything
+         *     about them, and folding them into a pass would be exactly the overclaim this
+         *     endpoint retires.
+         */
+        AuditChainResponse: {
+            /**
+             * Broken At
+             * @description Id of the first row that did not verify.
+             */
+            broken_at?: number | null;
+            /**
+             * Checked
+             * @description Rows that carried a hash and were re-derived.
+             */
+            checked: number;
+            /**
+             * Detail
+             * @description One sentence naming what was found.
+             */
+            detail: string;
+            /**
+             * Head
+             * @description This chain's current tip. A chain cannot detect rows removed from its END — what remains verifies perfectly — so record this value elsewhere and notice if it ever goes backwards. Stated as a limit rather than left as a claim the verifier silently fails to make.
+             */
+            head?: string | null;
+            /**
+             * Intact
+             * @description Whether every hashed row re-derived, in order.
+             */
+            intact: boolean;
+            /**
+             * Unchained
+             * @description Rows predating the chain. Reported, never counted as verified.
+             */
+            unchained: number;
         };
         /**
          * AuditLogResponse
@@ -6432,9 +6631,18 @@ export interface components {
          *     system nobody here controls) straight into an agent's context, where it is read
          *     by the model as instructions-adjacent text. Screening the user and screening
          *     the answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.
+         *
+         *     ``MEMORY_WRITE`` is the fourth, and it was missing for a subtler reason: a
+         *     poisoned fact is not screened by any of the other three. It arrives as ordinary
+         *     conversation — which the ``INPUT`` rail passes, correctly, because it *is*
+         *     ordinary — is distilled by the extractor into a durable fact, and comes back on a
+         *     later turn as this platform's own remembered belief, at which point nothing treats
+         *     it as untrusted any more. The turn that poisons the store and the turn that is
+         *     poisoned by it are different turns, which is why guarding both ends of a single
+         *     turn never caught it. OWASP ASI06.
          * @enum {string}
          */
-        GuardStage: "input" | "output" | "tool_result";
+        GuardStage: "input" | "output" | "tool_result" | "memory_write";
         /**
          * GuardVerdict
          * @description Outcome of an input or output rail.
@@ -6903,6 +7111,56 @@ export interface components {
             source: string;
             /** Window Capacity */
             window_capacity?: number | null;
+        };
+        /**
+         * LiveEvalResponse
+         * @description The result of an explicitly-triggered, LLM-judged evaluation run.
+         *
+         *     Separate from ``GET /evals/report`` on purpose: that one is deterministic, offline
+         *     and memoised so a dashboard can poll it. This one costs model calls, and every one
+         *     of them goes through the platform gateway — so the spend shows up in the usage
+         *     ledger like any other call rather than being invisible to the cost surface.
+         */
+        LiveEvalResponse: {
+            /** Metrics */
+            metrics: components["schemas"]["LiveMetricRow"][];
+            /**
+             * Source
+             * @description What produced these numbers.
+             */
+            source: string;
+        };
+        /**
+         * LiveMetricRow
+         * @description One metric computed by a real evaluation library, not by a proxy.
+         */
+        LiveMetricRow: {
+            /**
+             * Cases
+             * @description How many cases contributed.
+             */
+            cases: number;
+            /**
+             * Library
+             * @description Library and version that produced it.
+             */
+            library: string;
+            /**
+             * Name
+             * @description Namespaced with the library — e.g. ragas:faithfulness.
+             */
+            name: string;
+            /**
+             * Note
+             * @description Why the value is null, when it is.
+             * @default
+             */
+            note: string;
+            /**
+             * Value
+             * @description The score in [0,1], or null when the metric could not be run. Never zero for a metric that did not run — a zero is a measurement.
+             */
+            value?: number | null;
         };
         /**
          * Locality
@@ -10834,7 +11092,7 @@ export interface components {
          * StreamEvent
          * @description Any event a run may emit over the POST /v1/query SSE stream. Discriminated on the `type` field carried inside the frame's `data` payload.
          */
-        StreamEvent: components["schemas"]["RunStarted"] | components["schemas"]["NodeStarted"] | components["schemas"]["NodeFinished"] | components["schemas"]["Reasoning"] | components["schemas"]["Guardrail"] | components["schemas"]["RetrievalStep"] | components["schemas"]["ToolCall"] | components["schemas"]["ToolResult"] | components["schemas"]["ApprovalRequired"] | components["schemas"]["AnswerChunk"] | components["schemas"]["RunFinished"] | components["schemas"]["ErrorEvent"] | components["schemas"]["ApprovalQueued"] | components["schemas"]["ProvenanceEvent"] | components["schemas"]["BudgetExceeded"] | components["schemas"]["Reflection"] | components["schemas"]["MemoryEvent"] | components["schemas"]["RoutingEvent"] | components["schemas"]["AgentStatus"] | components["schemas"]["SynthesisEvent"];
+        StreamEvent: components["schemas"]["RunStarted"] | components["schemas"]["NodeStarted"] | components["schemas"]["NodeFinished"] | components["schemas"]["Reasoning"] | components["schemas"]["Guardrail"] | components["schemas"]["RetrievalStep"] | components["schemas"]["ToolCall"] | components["schemas"]["ToolResult"] | components["schemas"]["ApprovalRequired"] | components["schemas"]["AnswerChunk"] | components["schemas"]["RunFinished"] | components["schemas"]["ErrorEvent"] | components["schemas"]["ApprovalQueued"] | components["schemas"]["ProvenanceEvent"] | components["schemas"]["BudgetExceeded"] | components["schemas"]["Reflection"] | components["schemas"]["Verification"] | components["schemas"]["MemoryEvent"] | components["schemas"]["RoutingEvent"] | components["schemas"]["AgentStatus"] | components["schemas"]["SynthesisEvent"];
         /**
          * SynthesisEvent
          * @description The fan-out's merge, naming which agents contributed **and which were omitted**.
@@ -11196,6 +11454,79 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * Verification
+         * @description One grounded check of a round's outcome, between ``act`` and ``reflect``.
+         *
+         *     The judge this replaces asked ``all(r["ok"])`` of values the *tools reported about
+         *     themselves*: a tool that updated the wrong record and returned success was "goal
+         *     met". This event carries what was checked and, in ``method``, **how** — which is the
+         *     part that matters. ``deterministic`` means the result rows decided it, ``read-back``
+         *     means a read-only call proved whether the write actually landed, and
+         *     ``unverifiable`` means nothing in this deployment could confirm it, which is
+         *     reported rather than assumed away.
+         *
+         *     ``repairable`` says whether another round could plausibly help. A guardrail refusal
+         *     and a call that has failed identically three times are both failures that retrying
+         *     cannot fix, and saying so on the wire is what stops a console implying otherwise.
+         *
+         *     Purely additive — a client that does not know this variant ignores it.
+         */
+        Verification: {
+            /**
+             * Agent Id
+             * @description The sub-agent that emitted this event. ``None`` means the supervisor or a graph-level node, which is what every single-pass run emits.
+             * @default null
+             */
+            agent_id: string | null;
+            /**
+             * Evidence
+             * @description The record read back, or the failure text. May be empty.
+             * @default
+             */
+            evidence: string;
+            /**
+             * Method
+             * @description The tier that decided: deterministic, read-back or unverifiable.
+             */
+            method: string;
+            /**
+             * Outcome
+             * @description VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED.
+             */
+            outcome: string;
+            /**
+             * Reason
+             * @description One sentence naming what was checked, and the result.
+             */
+            reason: string;
+            /**
+             * Repairable
+             * @description Whether another round could plausibly change this outcome.
+             */
+            repairable: boolean;
+            /**
+             * Round
+             * @description The planning round this check follows.
+             * @default 0
+             */
+            round: number;
+            /**
+             * Run Id
+             * @description Correlates all events of one query run.
+             */
+            run_id: string;
+            /**
+             * Seq
+             * @description Monotonic sequence number within the run.
+             */
+            seq: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "verification";
         };
         /**
          * VisionAnalyseRequest
@@ -11594,6 +11925,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    a2a_rpc_v1_a2a_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -12269,6 +12622,37 @@ export interface operations {
             };
         };
     };
+    audit_verify_v1_audit_verify_get: {
+        parameters: {
+            query?: {
+                tenant_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditChainResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     login_v1_auth_login_post: {
         parameters: {
             query?: never;
@@ -12502,6 +12886,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evals_live_run_v1_evals_live_run_post: {
+        parameters: {
+            query?: {
+                /** @description Seed cases to score. Each is ~9 gateway calls (5 completions + 4 embeddings), so this bound is a spend bound. Declared here rather than clamped silently in the body: a caller who asks for 100 should be told the ceiling is 6, not quietly given 6 and left believing they got 100. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveEvalResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14175,6 +14591,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PipelinesResponse"];
+                };
+            };
+        };
+    };
+    platform_agbom_v1_platform_agbom_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

@@ -28,15 +28,15 @@ function FactDetail({ fact }: { fact: MemoryFactRow }): ReactElement {
   const invalid = !fact.is_valid
   return (
     <div className="animate-reveal border-t border-border/60 px-3 py-2.5">
-      <p translate="no" className="font-mono text-[0.64rem] leading-relaxed break-words text-muted-foreground">
+      <p translate="no" className="font-mono text-[0.6875rem] leading-relaxed break-words text-muted-foreground">
         <span className="text-blue-600">{fact.subject}</span>
         {' · '}
         <span className="text-blue-700">{fact.predicate}</span>
         {' · '}
         <span className="text-blue-800">{fact.object}</span>
       </p>
-      <p className="tabular mt-1.5 font-mono text-[0.6rem] text-muted-foreground">
-        <span className="eyebrow mr-1.5 text-[0.54rem]">Valid</span>
+      <p className="tabular mt-1.5 font-mono text-[0.6875rem] text-muted-foreground">
+        <span className="eyebrow mr-1.5 text-[0.6875rem]">Valid</span>
         {formatDate(fact.valid_at)}
         {' → '}
         <span className={invalid ? 'text-block-ink' : 'text-ok-ink'}>
@@ -95,17 +95,17 @@ function FactRow({ fact }: { fact: MemoryFactRow }): ReactElement {
         <span className="flex w-full items-center gap-2">
           <Figure
             label={`Confidence ${Math.round(fact.confidence * 100)} percent`}
-            className="shrink-0 text-[0.68rem] leading-4 text-muted-foreground"
+            className="shrink-0 text-[0.6875rem] leading-4 text-muted-foreground"
           >
             {Math.round(fact.confidence * 100)}%
           </Figure>
           <Figure
             label={`Recalled ${fact.access_count} times`}
-            className="shrink-0 text-[0.6rem] leading-4 text-muted-foreground"
+            className="shrink-0 text-[0.6875rem] leading-4 text-muted-foreground"
           >
             {fact.access_count}× recalled
           </Figure>
-          <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
+          <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.6875rem]">
             {status.label}
           </Badge>
           <ChevronDown
@@ -156,13 +156,13 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
         right={
           <>
             {state.status === 'ready' && (
-              <Badge tone="graph" className="text-[0.58rem]">
+              <Badge tone="graph" className="text-[0.6875rem]">
                 {validCount} current
               </Badge>
             )}
             <label
               htmlFor="facts-show-superseded"
-              className="flex cursor-pointer items-center gap-1.5 text-[0.62rem] text-muted-foreground"
+              className="flex cursor-pointer items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
             >
               <input
                 id="facts-show-superseded"

@@ -15,7 +15,7 @@ import { hasProvenance, hasSpanCheck, readSources, type SourceEvidence } from '.
 function SourceRow({ source, rank }: { source: SourceEvidence; rank: number }): ReactElement {
   return (
     <li className="grid grid-cols-[auto_1fr] items-start gap-2 border-b border-border/60 py-2 last:border-b-0">
-      <span className="tabular mt-0.5 w-5 text-right font-mono text-[0.68rem] text-muted-foreground">
+      <span className="tabular mt-0.5 w-5 text-right font-mono text-[0.6875rem] text-muted-foreground">
         {rank}
       </span>
       <div className="min-w-0">
@@ -41,7 +41,7 @@ function SourceRow({ source, rank }: { source: SourceEvidence; rank: number }): 
             </Badge>
           )}
 
-          <span className="font-mono text-[0.66rem] text-muted-foreground/70">{source.id}</span>
+          <span className="font-mono text-[0.6875rem] text-muted-foreground/70">{source.id}</span>
         </div>
       </div>
     </li>

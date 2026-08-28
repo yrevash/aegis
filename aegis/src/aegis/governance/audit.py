@@ -19,10 +19,19 @@ passes the scope it resolved from the sealed :class:`AuthContext`, never a clien
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select
+
+from aegis.governance.chain import (
+    GENESIS,
+    canonical_payload,
+    chain_hash,
+    row_fingerprint,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.governance.context import get_governance_context
@@ -100,18 +109,267 @@ async def record_audit(
         tenant_id = gov.tenant_id if gov is not None else None
     async with _session() as session:
         await _set_tenant_scope(session, tenant_id)
-        session.add(
-            AuditLog(
+
+        # ── the chain link ───────────────────────────────────────────────────────
+        # Read the tail of THIS tenant's chain inside the same transaction as the
+        # insert, so two concurrent writers cannot both read the same predecessor and
+        # both claim it. If they race anyway, the unique index on
+        # (tenant_id, prev_hash) turns the loser into an integrity error rather than a
+        # silent fork — the failure mode this design exists to make impossible.
+        tail = (
+            await session.execute(
+                select(AuditLog.row_hash)
+                .where(
+                    AuditLog.tenant_id.is_(None)
+                    if tenant_id is None
+                    else AuditLog.tenant_id == tenant_id
+                )
+                .where(AuditLog.row_hash.is_not(None))
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        # Supplied here rather than by ``func.now()``: it is part of what gets hashed,
+        # and the database assigns its own value only after the app must already have
+        # computed the hash. See the note on ``AuditLog``.
+        ts = datetime.now(UTC).replace(tzinfo=None)
+
+        # Store the CANONICAL payload, not the dict we were handed. ``jsonb`` does not
+        # round-trip the text it is given — it drops key order and renormalises numbers
+        # — so hashing what we sent and verifying what comes back are different
+        # functions of the same data unless what we store is already a fixed point.
+        # Skipping this makes a row nobody touched fail verification, and a verifier
+        # that cries wolf is a verifier that gets turned off.
+        stored_payload = json.loads(canonical_payload(payload))
+
+        prev = tail if tail is not None else GENESIS
+        row_hash = chain_hash(
+            prev,
+            row_fingerprint(
                 tenant_id=tenant_id,
+                ts=ts,
                 action=action,
                 actor=actor,
                 model=model,
                 trace_id=trace_id,
-                payload=payload,
+                payload=stored_payload,
                 approved_by=approved_by,
+            ),
+        )
+
+        session.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                ts=ts,
+                action=action,
+                actor=actor,
+                model=model,
+                trace_id=trace_id,
+                payload=stored_payload,
+                approved_by=approved_by,
+                row_hash=row_hash,
+                prev_hash=prev,
             )
         )
         await session.commit()
+
+
+async def chain_row(
+    session: AsyncSession,
+    *,
+    tenant_id: int | None,
+    ts: datetime,
+    action: str,
+    actor: str | None,
+    model: str | None = None,
+    trace_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+    approved_by: str | None = None,
+) -> AuditLog:
+    """Build a chained :class:`AuditLog` inside a caller's own transaction.
+
+    ``record_audit`` opens its own session, which is exactly wrong for a writer that
+    must commit its audit row *with* the state change it describes — the SLA sweeper
+    writes the rejection and its record together precisely so the two can never
+    disagree. That writer was therefore inserting ``AuditLog`` directly, and inserting
+    it **unchained**: a row with no hash sitting mid-chain, which the verifier can only
+    report as uncovered.
+
+    This gives such a writer the chain without taking away its transaction. The tail is
+    read in the caller's session, so the link is computed against what that transaction
+    can see.
+
+    Returns:
+        The row, chained and ready to ``session.add``. Not added here — the caller owns
+        the transaction and the ordering within it.
+    """
+    tail = (
+        await session.execute(
+            select(AuditLog.row_hash)
+            .where(
+                AuditLog.tenant_id.is_(None)
+                if tenant_id is None
+                else AuditLog.tenant_id == tenant_id
+            )
+            .where(AuditLog.row_hash.is_not(None))
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    stored_payload = json.loads(canonical_payload(payload))
+    prev = tail if tail is not None else GENESIS
+    return AuditLog(
+        tenant_id=tenant_id,
+        ts=ts,
+        action=action,
+        actor=actor,
+        model=model,
+        trace_id=trace_id,
+        payload=stored_payload,
+        approved_by=approved_by,
+        row_hash=chain_hash(
+            prev,
+            row_fingerprint(
+                tenant_id=tenant_id,
+                ts=ts,
+                action=action,
+                actor=actor,
+                model=model,
+                trace_id=trace_id,
+                payload=stored_payload,
+                approved_by=approved_by,
+            ),
+        ),
+        prev_hash=prev,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ChainVerification:
+    """What walking one tenant's audit chain found.
+
+    Attributes:
+        checked: Rows that carried a hash and were re-derived.
+        unchained: Rows that predate the chain. Reported, never counted as verified —
+            nothing can prove anything about history nobody hashed, and quietly folding
+            these into a pass would be the exact overclaim this feature exists to end.
+        intact: Whether every checked row re-derived to the hash it carries, in order.
+        broken_at: The ``id`` of the first row that did not, or ``None``.
+        detail: One sentence naming what broke, for an operator who is not going to
+            read the algorithm.
+        head: The last row's hash — this chain's current tip.
+
+            **Why this is on the response.** A chain detects an edited row and a row
+            removed from the middle, because both orphan everything downstream. It
+            cannot, by itself, detect rows removed from the **end**: truncate the tail
+            and what remains is a shorter chain that verifies perfectly. Nothing inside
+            the database can close that, because the evidence of what was there is what
+            was deleted.
+
+            Publishing the head is what closes it, and it has to be closed *outside*.
+            An operator who records this value — in a ticket, a monitor, another system
+            — can detect truncation by noticing the head went backwards. Until that
+            anchor exists somewhere else, tail truncation is an honest and stated limit
+            of this verifier rather than a claim it quietly fails to make.
+    """
+
+    checked: int
+    unchained: int
+    intact: bool
+    broken_at: int | None = None
+    detail: str = ""
+    head: str | None = None
+
+
+async def verify_audit_chain(tenant_id: int | None) -> ChainVerification:
+    """Walk one tenant's chain and report the first break, if any.
+
+    The chain is what makes deletion detectable. Per-row hashes alone prove no row was
+    *edited*; they say nothing about a row being removed, because the survivors still
+    verify individually. Seeding each hash with its predecessor's means removing any row
+    breaks every row after it.
+
+    Args:
+        tenant_id: The tenant whose chain to walk, or ``None`` for the platform chain.
+
+    Returns:
+        A :class:`ChainVerification`. ``intact`` is about the **checked** rows only;
+        ``unchained`` is reported separately and on purpose.
+    """
+    async with _session() as session:
+        await _set_tenant_scope(session, tenant_id)
+        rows = (
+            (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.tenant_id.is_(None)
+                        if tenant_id is None
+                        else AuditLog.tenant_id == tenant_id
+                    )
+                    .order_by(AuditLog.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    unchained = sum(1 for r in rows if r.row_hash is None)
+    chained = [r for r in rows if r.row_hash is not None]
+
+    previous: str | None = None
+    for row in chained:
+        expected_prev = previous if previous is not None else GENESIS
+        if row.prev_hash != expected_prev:
+            return ChainVerification(
+                checked=len(chained),
+                unchained=unchained,
+                intact=False,
+                broken_at=row.id,
+                detail=(
+                    f"row {row.id} claims a predecessor this chain does not have — "
+                    "a row before it was removed, or the trail was spliced."
+                ),
+            )
+        recomputed = chain_hash(
+            row.prev_hash,
+            row_fingerprint(
+                tenant_id=row.tenant_id,
+                ts=row.ts,
+                action=row.action,
+                actor=row.actor,
+                model=row.model,
+                trace_id=row.trace_id,
+                payload=row.payload,
+                approved_by=row.approved_by,
+            ),
+        )
+        if recomputed != row.row_hash:
+            return ChainVerification(
+                checked=len(chained),
+                unchained=unchained,
+                intact=False,
+                broken_at=row.id,
+                detail=f"row {row.id} does not hash to the value it carries — it was edited.",
+            )
+        previous = row.row_hash
+
+    return ChainVerification(
+        checked=len(chained),
+        unchained=unchained,
+        intact=True,
+        head=chained[-1].row_hash if chained else None,
+        detail=(
+            f"{len(chained)} row(s) re-derived in order"
+            + (
+                f"; {unchained} row(s) predate the chain and are not covered by it."
+                if unchained
+                else "."
+            )
+        ),
+    )
 
 
 def _iso_utc(ts: datetime) -> str:

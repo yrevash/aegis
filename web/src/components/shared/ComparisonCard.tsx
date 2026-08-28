@@ -65,7 +65,7 @@ export function ComparisonCard({
                 <span className="flex items-center gap-1.5">
                   {row.label}
                   {row.diff && (
-                    <span className="eyebrow rounded-sm border border-risk/40 px-1 py-px text-[0.52rem] text-risk-ink">
+                    <span className="eyebrow rounded-sm border border-risk/40 px-1 py-px text-[0.6875rem] text-risk-ink">
                       differs
                     </span>
                   )}

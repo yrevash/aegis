@@ -72,7 +72,7 @@ export function SessionRail({
               >
                 {titleOf(session)}
                 {session.turns.length > 0 && (
-                  <span className="ml-1.5 font-mono text-[0.66rem] text-muted-foreground/70">
+                  <span className="ml-1.5 font-mono text-[0.6875rem] text-muted-foreground/70">
                     {session.turns.length}
                   </span>
                 )}

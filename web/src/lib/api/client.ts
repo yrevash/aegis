@@ -12,6 +12,8 @@ import type {
   AgentTopologyResponse,
   ApprovalRequest,
   ApprovalResponse,
+  AuditChainResponse,
+  LiveEvalResponse,
   AuditLogResponse,
   Budget,
   BudgetsResponse,
@@ -85,7 +87,7 @@ import type {
 
 import { ApiError, logRequestFailure, serverDetail } from './apiError'
 import { getAuthToken, reportSessionExpired } from './authToken'
-import { API_BASE } from './config'
+import { API_BASE, API_ORIGIN } from './config'
 
 /**
  * Issue one authenticated call.
@@ -206,6 +208,53 @@ export async function getAudit(
   search = '?limit=50',
 ): Promise<AuditLogResponse> {
   return request<AuditLogResponse>(`/audit${search}`, { method: 'GET' }, token)
+}
+
+/**
+ * Walk the audit chain and report the first break.
+ *
+ * Every row is hashed with its predecessor's hash mixed in, so editing a row breaks that
+ * row and **removing** one breaks everything after it — the quieter attack, and the one a
+ * per-row hash cannot see. Scoped exactly like `getAudit`.
+ *
+ * `unchained` counts rows written before the chain existed. They carry no hash, so
+ * nothing can be proved about them; the response reports them separately rather than
+ * folding them into a pass.
+ */
+export async function verifyAuditChain(
+  token: string | null,
+  tenantId?: number,
+): Promise<AuditChainResponse> {
+  const search = tenantId === undefined ? '' : `?tenant_id=${tenantId}`
+  return request<AuditChainResponse>(`/audit/verify${search}`, { method: 'GET' }, token)
+}
+
+/**
+ * Score the seed corpus with the real Ragas metrics.
+ *
+ * A POST because it **spends money**: every metric is LLM-judged and answer relevancy
+ * also embeds. `getEvalsReport` stays the cheap deterministic rollup this page polls;
+ * this one only runs when somebody asks for it.
+ */
+/**
+ * How many seed cases one live run scores.
+ *
+ * Exported so the button can state the cost *before* it is pressed rather than after.
+ * Each case is ~9 gateway calls (5 completions + 4 embeddings), so this number is the
+ * only thing standing between a click and a budget event — it belongs where the reader
+ * of the button and the sender of the request both see the same value.
+ */
+export const LIVE_EVAL_CASES = 2
+
+export async function runLiveEvals(
+  token: string | null,
+  limit = LIVE_EVAL_CASES,
+): Promise<LiveEvalResponse> {
+  return request<LiveEvalResponse>(
+    `/evals/live-run?limit=${limit}`,
+    { method: 'POST' },
+    token,
+  )
 }
 
 /** Request a SHAP + conformal explanation for a set of features. */
@@ -626,6 +675,19 @@ export async function getSbom(
   return JSON.stringify(body, null, 2)
 }
 
+/**
+ * Fetch the Agent Bill of Materials.
+ *
+ * The SBOM above answers "what packages is this built from". This answers the question a
+ * package manifest cannot: **what can this agent do** — every tool with its risk tier,
+ * every model deployment the router will request, every guard stage. Same CycloneDX 1.6
+ * envelope, so the same scanner reads it.
+ */
+export async function getAgbom(token: string | null = null): Promise<string> {
+  const body = await request<unknown>('/platform/agbom', { method: 'GET' }, token)
+  return JSON.stringify(body, null, 2)
+}
+
 // ── Client: risk map + savings ───────────────────────────────────────────────
 
 /** Fetch the agent-risk assurance heat-map (client-facing). */
@@ -866,4 +928,37 @@ export async function getForecastDomain(
     { method: 'GET' },
     token,
   )
+}
+
+/** The shape the Interop screen reads off the public agent card. */
+export interface AgentCard {
+  name?: string
+  protocolVersion?: string
+  skills?: { id: string; name: string }[]
+  supportedInterfaces?: { url: string; protocolBinding: string }[]
+}
+
+/**
+ * Read the public A2A agent card.
+ *
+ * Joined onto {@link API_ORIGIN}, not {@link API_BASE}: `/.well-known/agent-card.json`
+ * is fixed by the A2A specification and registered with IANA, so a well-known URI moved
+ * under `/v1` has not been served at all.
+ *
+ * **Unauthenticated on purpose, and it takes no token.** Discovery is precisely what a
+ * stranger is allowed to read, and issuing this request from the browser with no
+ * credential is the same request a peer agent makes — which is what makes the Interop
+ * screen a probe rather than a claim.
+ *
+ * Returns `null` rather than throwing when the card does not answer: the caller renders
+ * "no answer", and a discovery endpoint being down is not an error state for the page
+ * that reports on it.
+ */
+export async function getAgentCard(): Promise<AgentCard | null> {
+  try {
+    const res = await fetch(`${API_ORIGIN}/.well-known/agent-card.json`)
+    return res.ok ? ((await res.json()) as AgentCard) : null
+  } catch {
+    return null
+  }
 }

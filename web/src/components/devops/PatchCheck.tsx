@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { checkPatches, getAdvisories, getSbom } from '@/lib/api/client'
+import { checkPatches, getAdvisories, getAgbom, getSbom } from '@/lib/api/client'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -263,6 +263,7 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
       <DataPanel
         eyebrow="installed vs latest"
         title="Every pin, worst first"
+        collapsible
         maxHeight={560}
         toolbar={
           <label className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-1.5 text-sm focus-within:ring-2 focus-within:ring-ring sm:max-w-xs">
@@ -503,19 +504,54 @@ function Advisories({ token }: { token: string | null }): ReactElement {
 
   useEffect(() => audit(), [audit])
 
+  /**
+   * Why the failure is rendered rather than logged.
+   *
+   * Both handlers used to be a bare `.then()`. A rejected fetch produced no file, no
+   * message and an unhandled promise rejection in a console nobody has open — the button
+   * simply did nothing, which a person reads as a broken page or, worse, as a download
+   * that silently succeeded. These are compliance artefacts; "I clicked export and
+   * nothing happened" is the one outcome that must not be ambiguous.
+   */
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  const save = useCallback((filename: string, text: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
   const download = useCallback(
     (format: 'cyclonedx' | 'spdx') => {
-      void getSbom(format, token).then((text) => {
-        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `aegis-sbom.${format}.json`
-        link.click()
-        URL.revokeObjectURL(url)
-      })
+      setExportError(null)
+      void getSbom(format, token)
+        .then((text) => save(`aegis-sbom.${format}.json`, text))
+        .catch((err: unknown) => {
+          setExportError(
+            `The ${format === 'spdx' ? 'SPDX' : 'CycloneDX'} export failed: ${
+              err instanceof Error ? err.message : 'the server did not respond'
+            }`,
+          )
+        })
     },
-    [token],
+    [token, save],
   )
+
+  const downloadAgbom = useCallback(() => {
+    setExportError(null)
+    void getAgbom(token)
+      .then((text) => save('aegis-agbom.cyclonedx.json', text))
+      .catch((err: unknown) => {
+        setExportError(
+          `The AgBOM export failed: ${
+            err instanceof Error ? err.message : 'the server did not respond'
+          }`,
+        )
+      })
+  }, [token, save])
 
   const exports = (
     <div className="flex flex-wrap items-center gap-2">
@@ -527,13 +563,38 @@ function Advisories({ token }: { token: string | null }): ReactElement {
         <Download className="size-3.5" aria-hidden />
         SPDX 2.3
       </Button>
+      {/* The agent's own inventory, beside the dependency one. A package manifest
+          cannot say which tools exist at which risk tier, and that is the half that
+          decides what an agent can actually do. */}
+      <Button size="sm" variant="outline" onClick={() => downloadAgbom()}>
+        <Download className="size-3.5" aria-hidden />
+        AgBOM
+      </Button>
+      {/* `aria-live` because the message appears after the click, with no focus move —
+          a screen-reader user would otherwise get the same silence the sighted user
+          used to get. */}
+      <p
+        aria-live="polite"
+        className="basis-full text-xs text-block-ink"
+      >
+        {exportError ?? ''}
+      </p>
     </div>
   )
 
   if (state.status === 'idle' || state.status === 'loading') {
     return (
       <Card>
-        <CardBody>
+        {/* The exports render ABOVE the skeleton, not after it.
+            They were inside the ready/error branches only, so all three downloads were
+            gated behind `POST /stack/advisories` — a live advisory-database call
+            measured at 10.8s warm, and still unanswered after 25s cold. The SBOM and
+            AgBOM endpoints are purely local and answer in milliseconds. On a firewalled
+            venue network the advisory call hangs, this component never leaves `loading`,
+            and the bill of materials becomes undownloadable for a reason that has
+            nothing to do with it. */}
+        <CardBody className="flex flex-col gap-4">
+          {exports}
           <LoadingState rows={3} label="Asking the advisory database…" />
         </CardBody>
       </Card>
@@ -571,6 +632,7 @@ function Advisories({ token }: { token: string | null }): ReactElement {
     <DataPanel
       eyebrow="aegis · POST /stack/advisories"
       title="Published advisories, worst first"
+      collapsible
       maxHeight={420}
       toolbar={
         <div className="flex flex-wrap items-center gap-3">

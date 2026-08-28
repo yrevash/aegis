@@ -303,6 +303,7 @@ function ConfigPanel({ config }: { config: HarnessConfigResponse }): ReactElemen
         className="min-w-0"
         eyebrow="AgentConfig"
         title="Every knob"
+        collapsible
         toolbar={
           tuned.length ? (
             <Badge tone="risk">
@@ -415,6 +416,7 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
         className="min-w-0"
         eyebrow="aegis.agent · run_summary()"
         title="Run trace"
+        collapsible
         actions={<Badge tone={statusTone(trace.status)}>{trace.status ?? '—'}</Badge>}
         // A per-node timeline is naturally wide. `maxHeight` is what makes
         // DataPanel's scroll container focusable and announced, so the rows a

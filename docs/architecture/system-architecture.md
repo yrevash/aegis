@@ -193,7 +193,7 @@ production-shaped component, not a stub wired only to this repository.
 | **The agent** | `agent`, `memory`, `skills` | Plan→gate→act→reflect and the graph every run walks; working/episodic/semantic memory and consolidation; `SKILL.md` documents and who may write them. |
 | **Knowledge** | `ingestion`, `retrieval`, `pipelines` | Parse→chunk→enrich→embed→index with a quality gate; hybrid vector+graph recall, fusion, reranking; the stage spec every pipeline is generated *from* (`PIPELINES.md` is generated output, so it cannot drift from the code). |
 | **The chokepoint** | `gateway`, `jobs`, `runs` | Every model call — routing, cost, budget, fallback; durable work on Temporal and what survives a crash; the run record, folded from its own events. |
-| **Measurement** | `ml`, `forecast`, `evals`, `analytics`, `ops`, `observability`, `reports` | Prediction + SHAP + conformal intervals; calibrated time-series forecasting; RAGAS-style metrics + an LLM-judge harness; the `analytics_*` views and their Superset integration; eval-gated release/promotion; OTel/OpenInference export; generated, sourced reports. |
+| **Measurement** | `ml`, `forecast`, `evals`, `analytics`, `ops`, `observability`, `reports` | Prediction + SHAP + conformal intervals; calibrated time-series forecasting; the real `ragas` metrics for live scoring plus deterministic RAGAS-style proxies and an LLM-judge harness for the offline gate; the `analytics_*` views and their Superset integration; eval-gated release/promotion; OTel/OpenInference export; generated, sourced reports. |
 | **Multimodal & outside data** | `media`, `vision`, `voice`, `websearch` | Payload hygiene; image understanding with the injection screen ahead of the model; speech-to-text guarded by the full text rail; reaching outside the tenant's own corpus (Tavily today, behind a swappable Protocol). |
 
 **Two different counts, on purpose.** `GET /v1/platform/capabilities` — the live manifest
@@ -370,6 +370,24 @@ absent, not invented — three things are worth naming directly:
 - **Checkpoint storage grows without bound.** Nothing prunes LangGraph's checkpoint
   tables, and no `audit_log` retention or partitioning is documented either. Both are
   recorded as owed work rather than described as solved.
+- **There is no trajectory compaction, and there is now a ceiling instead.** Nothing in
+  Aegis summarises or evicts a run's own turn history. The memory subsystem
+  (`aegis/src/aegis/memory/`) budgets and orders *recalled* material across turns; it
+  never sees the trajectory a single run accumulates. That trajectory exists in exactly
+  one place — a sub-agent lane's `messages` list — and it is now bounded twice: by
+  `AgentConfig.max_trajectory_tokens` before each model call, and by
+  `AgentConfig.max_tool_result_tokens` on each tool result before it is appended. Both
+  are in the settings catalogue as `TIGHTEN_ONLY`, so a tenant can bound its own runs
+  harder than the platform does and can never loosen past it. A lane that reaches the
+  ceiling ends at `SubAgentStatus.CEILING`, keeps the findings it already has, emits a
+  `status="ceiling"` beat, and is named as cut short by the synthesis — the same
+  designed terminal state a timeout gets. **The ceiling is a refusal, not a
+  compaction:** the lane stops rather than continuing on a summarised history, because
+  summarising would put a model call, and a compression-hallucination surface, on the
+  run path. Long-horizon runs that would need compaction are therefore **out of scope by
+  design**, not merely unbuilt — see
+  [`dev_new_docs_v2/sota/07-long-horizon-ceiling.md`](../dev_new_docs_v2/sota/07-long-horizon-ceiling.md)
+  for what building it would cost.
 - **DNS is not resolved by the SSRF guard.** MCP peer registration refuses loopback,
   link-local, private and reserved addresses and non-allowlisted schemes at the registry
   chokepoint, but a hostname that resolves inward still passes. Stated, not hidden.

@@ -228,7 +228,7 @@ function BranchTag({
   // A policy-denied action on the direct path is a block, not an autonomous run.
   if (denied) {
     return (
-      <span className="ml-auto rounded-md border border-block/60 bg-block/15 px-1.5 py-0.5 font-mono text-[0.6rem] tracking-wide text-block-ink">
+      <span className="ml-auto rounded-md border border-block/60 bg-block/15 px-1.5 py-0.5 font-mono text-[0.6875rem] tracking-wide text-block-ink">
         action denied
       </span>
     )
@@ -237,7 +237,7 @@ function BranchTag({
   return (
     <span
       className={cn(
-        'ml-auto rounded-md border px-1.5 py-0.5 font-mono text-[0.6rem] tracking-wide',
+        'ml-auto rounded-md border px-1.5 py-0.5 font-mono text-[0.6875rem] tracking-wide',
         gated ? 'border-risk/60 bg-risk/15 text-risk-ink' : 'border-ok/60 bg-ok/15 text-ok-ink',
       )}
     >
@@ -249,7 +249,7 @@ function BranchTag({
 /** A compact per-node cost/latency chip from the glass-box ledger. */
 function LedgerChip({ label, fin }: { label: string; fin: NodeFinished }): ReactElement {
   return (
-    <span className="tabular inline-flex items-center gap-1 rounded-md border border-border bg-surface-2/70 px-1.5 py-0.5 font-mono text-[0.6rem] text-muted-foreground">
+    <span className="tabular inline-flex items-center gap-1 rounded-md border border-border bg-surface-2/70 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
       <span className="font-medium text-foreground">{label}</span>
       <span aria-hidden>·</span>
       {fin.duration_ms}ms

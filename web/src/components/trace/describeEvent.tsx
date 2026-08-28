@@ -31,6 +31,7 @@ import {
   Wallet,
   Wrench,
   type LucideIcon,
+  Gauge,
 } from 'lucide-react'
 
 import { readApproval } from '@/components/approval/approvalActions'
@@ -52,14 +53,15 @@ const GUARD_STAGE_LABEL: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
+  memory_write: 'Memory write',
 }
 
 /**
  * How one sub-agent lifecycle beat reads.
  *
- * `timeout` is a **designed** terminal state (see `AgentStatus` in `@/lib/stream`), so it
- * is a warning and never a failure; painting it red would misreport graceful degradation
- * as a crash. `status` is a plain string on the wire, so an unknown beat degrades to a
+ * `timeout` and `ceiling` are **designed** terminal states (see `AgentStatus` in
+ * `@/lib/stream`), so both are warnings and never failures; painting either red would
+ * misreport graceful degradation as a crash. `status` is a plain string on the wire, so an unknown beat degrades to a
  * neutral dot carrying the server's own word rather than being dropped.
  */
 interface AgentStatusView {
@@ -76,6 +78,10 @@ const AGENT_STATUS_VIEW: Record<string, AgentStatusView> = {
   done: { signal: 'ok', icon: CircleCheck, word: 'done' },
   failed: { signal: 'block', icon: CircleSlash, word: 'failed' },
   timeout: { signal: 'risk', icon: Hourglass, word: 'timed out' },
+  // Not 'failed' and not 'done'. The lane hit its trajectory ceiling: it stopped early
+  // AND its findings are in the answer. The word has to carry both halves, because a
+  // reader who sees only "stopped" discounts evidence that was actually used.
+  ceiling: { signal: 'risk', icon: Gauge, word: 'cut short at its ceiling' },
 }
 
 const AGENT_STATUS_FALLBACK: AgentStatusView = {

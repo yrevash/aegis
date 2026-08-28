@@ -79,6 +79,12 @@
       "terminal": false
     },
     {
+      "id": "verify",
+      "label": "Verify the outcome",
+      "entry": false,
+      "terminal": false
+    },
+    {
       "id": "reflect",
       "label": "Reflect & self-repair",
       "entry": false,
@@ -106,7 +112,7 @@
   "edges": [
     {
       "source": "act",
-      "target": "reflect",
+      "target": "verify",
       "conditional": false
     },
     {
@@ -217,6 +223,11 @@
     {
       "source": "synthesize",
       "target": "gate",
+      "conditional": false
+    },
+    {
+      "source": "verify",
+      "target": "reflect",
       "conditional": false
     }
   ]

@@ -188,6 +188,7 @@ export function DelegationMap({
       className="rounded-lg"
       eyebrow="aegis.rbac · lib/portal · ROLE_SECTIONS"
       title="Where each portal's authority stops"
+      collapsible
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="neutral" className="gap-1.5">
@@ -254,7 +255,7 @@ export function DelegationMap({
                       portal nobody holds still exists, and says so with a zero. */}
                   <span
                     className={cn(
-                      'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.68rem]',
+                      'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem]',
                       holders != null && holders[portal] > 0
                         ? 'bg-blue-100/70 text-blue-800'
                         : 'bg-surface-2 text-muted-foreground',
@@ -270,7 +271,7 @@ export function DelegationMap({
                       </>
                     )}
                   </span>
-                  <Figure className="text-[0.66rem] text-muted-foreground">
+                  <Figure className="text-[0.6875rem] text-muted-foreground">
                     {`${ROLE_SECTIONS[portal].length} sections`}
                   </Figure>
                 </span>
@@ -319,7 +320,7 @@ export function DelegationMap({
                               .join(', ')}`
                       }
                       className={cn(
-                        'inline-flex h-6 min-w-[2.75rem] items-center justify-center gap-1 rounded-md border text-[0.68rem] font-medium transition-colors duration-[--dur-fast] motion-reduce:transition-none',
+                        'inline-flex h-6 min-w-[2.75rem] items-center justify-center gap-1 rounded-md border text-[0.6875rem] font-medium transition-colors duration-[--dur-fast] motion-reduce:transition-none',
                         has
                           ? 'border-blue-600 bg-blue-600 text-white'
                           : 'border-border bg-surface-2 text-muted-foreground',
@@ -331,7 +332,7 @@ export function DelegationMap({
                         <Minus className="size-3.5 shrink-0" aria-hidden />
                       )}
                       {partial ? (
-                        <Figure className="text-[0.68rem]">
+                        <Figure className="text-[0.6875rem]">
                           {`${reached.length}/${authority.sections.length}`}
                         </Figure>
                       ) : null}

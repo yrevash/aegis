@@ -487,6 +487,7 @@ function VoiceView(): ReactElement {
             as="h3"
             eyebrow="segments[]"
             title="Segments"
+            collapsible
             maxHeight={420}
             actions={
               <Badge tone={result.has_confidence ? 'ml' : 'neutral'} className="font-mono">

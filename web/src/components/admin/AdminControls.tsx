@@ -265,6 +265,7 @@ function TenantList({
       className="rounded-lg"
       eyebrow="aegis.admin · /admin/tenants"
       title="Tenants"
+      collapsible
       maxHeight={320}
       actions={
         <Badge tone="neutral" className="gap-1.5">
@@ -340,6 +341,7 @@ function BudgetList({
       className="rounded-lg"
       eyebrow="aegis.admin · /admin/budgets"
       title="Caps in force"
+      collapsible
       maxHeight={320}
       actions={
         <Badge tone="neutral" className="gap-1.5">

@@ -400,14 +400,14 @@ function SingleFigures({
     <div className="flex flex-wrap items-end gap-x-6 gap-y-3 py-2">
       {series.map((measure) => (
         <p key={measure} className="flex min-w-0 flex-col">
-          <span className="text-[0.68rem] text-muted-foreground">{measure}</span>
+          <span className="text-[0.6875rem] text-muted-foreground">{measure}</span>
           <Figure size="stat" className="text-foreground">
             {formatValue(Number(row[measure]))}
           </Figure>
         </p>
       ))}
       <p className="flex min-w-0 flex-col">
-        <span className="text-[0.68rem] text-muted-foreground">{dimension}</span>
+        <span className="text-[0.6875rem] text-muted-foreground">{dimension}</span>
         <Figure truncate className="text-foreground">{row.label}</Figure>
       </p>
     </div>
@@ -478,7 +478,7 @@ function BoardCard({
             <div className="flex flex-col gap-3">
               {form.series.slice(0, 2).map((measure) => (
                 <figure key={measure} className="space-y-1">
-                  <figcaption className="text-[0.68rem] text-muted-foreground">
+                  <figcaption className="text-[0.6875rem] text-muted-foreground">
                     {measure} by {dimension}
                   </figcaption>
                   <MeasurePlot
@@ -492,7 +492,7 @@ function BoardCard({
             </div>
           ) : (
             <figure className="space-y-1.5">
-              <figcaption className="text-[0.68rem] text-muted-foreground">
+              <figcaption className="text-[0.6875rem] text-muted-foreground">
                 {form.series.join(' and ')} by {dimension}
               </figcaption>
               {form.kind === 'trend' && form.series.length > 1 ? (
@@ -526,7 +526,7 @@ function BoardCard({
               {board.series.length > form.series.length
                 ? `${board.series.length - form.series.length} more measure${board.series.length - form.series.length > 1 ? 's' : ''}, and the rows`
                 : 'The rows behind the chart'}
-              <span className="tabular ml-auto font-mono text-[0.68rem] text-muted-foreground">
+              <span className="tabular ml-auto font-mono text-[0.6875rem] text-muted-foreground">
                 {counted.dropped > 0 ? `${counted.dropped} without an x value` : windowLabel}
               </span>
             </summary>

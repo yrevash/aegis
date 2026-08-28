@@ -100,7 +100,7 @@ function Header(): ReactElement {
         />
         glass-box · per-node cost &amp; latency
       </span>
-      <span className="tabular font-mono text-[0.62rem] text-muted-foreground">
+      <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
         ms · usd
       </span>
     </div>

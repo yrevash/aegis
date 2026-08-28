@@ -223,17 +223,17 @@ function ToolItem({
             {tool.description || 'The peer advertised no description for this tool.'}
           </p>
 
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] text-muted-foreground">
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.6875rem] text-muted-foreground">
             <Users className="size-3" aria-hidden />
             {tool.personas.length > 0 ? (
-              <Figure className="text-[0.68rem] text-foreground">
+              <Figure className="text-[0.6875rem] text-foreground">
                 {tool.personas.join(', ')}
               </Figure>
             ) : (
               <span className="italic">nobody is admitted</span>
             )}
             <span aria-hidden>·</span>
-            <Figure className="text-[0.68rem]">
+            <Figure className="text-[0.6875rem]">
               {tool.serverId} advertises it as {tool.remoteName}
             </Figure>
           </p>
@@ -314,10 +314,10 @@ function ToolItem({
               id={consequenceId}
               className={
                 loweringOutOfGate
-                  ? 'flex items-start gap-1.5 rounded-lg border border-block/60 bg-block/10 px-2 py-1.5 text-[0.68rem] leading-relaxed font-medium text-block-ink'
+                  ? 'flex items-start gap-1.5 rounded-lg border border-block/60 bg-block/10 px-2 py-1.5 text-[0.6875rem] leading-relaxed font-medium text-block-ink'
                   : gatesAt(risk, gateRisk)
-                    ? 'text-[0.68rem] leading-relaxed text-muted-foreground'
-                    : 'flex items-start gap-1.5 text-[0.68rem] leading-relaxed text-block-ink'
+                    ? 'text-[0.6875rem] leading-relaxed text-muted-foreground'
+                    : 'flex items-start gap-1.5 text-[0.6875rem] leading-relaxed text-block-ink'
               }
             >
               {gatesAt(risk, gateRisk) ? null : (

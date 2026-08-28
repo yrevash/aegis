@@ -360,6 +360,7 @@ async def test_an_unchecked_refusal_is_not_stored_as_a_block(client, db):
             # monitor left underneath would block the two extraction bursts and this
             # test would again be claiming a total outage it had not arranged.
             check_sequence=_dead_rail,
+            check_memory_write=_dead_rail,
         )
 
     original = mod._rails_for

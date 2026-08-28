@@ -41,11 +41,21 @@ export type LaneStatus =
   | 'done'
   | 'failed'
   | 'timeout'
+  | 'ceiling'
   | 'waiting'
   | 'blocked'
 
 /** Lane states that will not change again. */
-const TERMINAL: ReadonlySet<string> = new Set(['done', 'failed', 'timeout', 'blocked'])
+const TERMINAL: ReadonlySet<string> = new Set([
+  'done',
+  'failed',
+  'timeout',
+  // A lane cut at its trajectory ceiling has stopped for good. Omitting it here left the
+  // card spinning forever on a run that had finished — the same class of bug the
+  // `timeout` beat exists to prevent.
+  'ceiling',
+  'blocked',
+])
 
 /** Whether a lane has stopped moving. */
 export function isTerminal(status: string): boolean {
@@ -57,10 +67,25 @@ export function isFailure(status: string): boolean {
   return status === 'failed' || status === 'timeout'
 }
 
+/**
+ * Whether a lane stopped early but still handed over what it had.
+ *
+ * Deliberately neither `isFailure` nor a clean `done`. A lane at its ceiling did the
+ * work, kept the findings, and ran out of trajectory — colouring it as a failure would
+ * overstate what went wrong, and colouring it `ok` would hide that the answer rests on
+ * partial evidence.
+ */
+export function isTruncated(status: string): boolean {
+  return status === 'ceiling'
+}
+
 /** The subsystem hue a lane state reads in. */
 export function laneSignal(status: string): Signal {
   if (isFailure(status) || status === 'blocked') return 'block'
   if (status === 'done') return 'ok'
+  // `risk`, not `ok` and not `block`: the lane produced usable findings, and they are
+  // incomplete. That is exactly the middle the risk hue exists for.
+  if (isTruncated(status)) return 'risk'
   if (status === 'waiting' || status === 'queued') return 'risk'
   return 'agent'
 }
@@ -339,6 +364,7 @@ const GUARD_STAGE: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
+  memory_write: 'Memory write',
 }
 
 /**

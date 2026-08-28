@@ -47,7 +47,7 @@ export function TraceRow({ event, last }: { event: StreamEvent; last: boolean })
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <p className={cn('text-sm font-medium', token.text)}>{title}</p>
-          <span className="tabular ml-auto font-mono text-[0.62rem] text-muted-foreground/70">
+          <span className="tabular ml-auto font-mono text-[0.6875rem] text-muted-foreground/70">
             #{event.seq}
           </span>
         </div>

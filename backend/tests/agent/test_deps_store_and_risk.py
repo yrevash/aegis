@@ -28,21 +28,21 @@ async def test_shared_store_seeds_real_records_not_an_empty_coroutine(monkeypatc
     ``ToolContext`` from this store, so an empty one means every gated action
     executes against nothing at all. Force a cold rebuild and assert it is real.
     """
-    monkeypatch.setattr(agent_deps, "_shared_store", None)
+    monkeypatch.setattr(agent_deps, "_shared_stores", {})
     store = agent_deps._get_shared_store()
     records = store.list_requests()
     assert len(records) > 0, "shared store is empty — tool actions would hit nothing"
 
 
 async def test_shared_store_looks_up_a_record_by_id(monkeypatch):
-    monkeypatch.setattr(agent_deps, "_shared_store", None)
+    monkeypatch.setattr(agent_deps, "_shared_stores", {})
     store = agent_deps._get_shared_store()
     first = store.list_requests()[0]
     assert store.get_request(first.id) is first
 
 
 async def test_empty_store_lists_no_records(monkeypatch):
-    monkeypatch.setattr(agent_deps, "_shared_store", InMemoryRecordStore([]))
+    monkeypatch.setattr(agent_deps, "_shared_stores", {None: InMemoryRecordStore([])})
     assert agent_deps._get_shared_store().list_requests() == []
 
 

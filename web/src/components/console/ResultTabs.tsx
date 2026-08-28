@@ -157,7 +157,7 @@ export function ResultTabs({
               {entry.count !== null && (
                 <span
                   className={cn(
-                    'font-mono text-[0.68rem]',
+                    'font-mono text-[0.6875rem]',
                     selected ? 'text-primary-foreground/70' : 'text-muted-foreground/70',
                   )}
                 >

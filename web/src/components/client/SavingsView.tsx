@@ -222,6 +222,7 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
             className={cn('col-span-12 min-w-0', showShare || unpriced.length > 0 ? 'lg:col-span-7' : null)}
             eyebrow="usage ledger"
             title="Where the savings come from"
+            collapsible
             actions={<ReconcileChip reconciles={rec.reconciles} delta={rec.deltaUsd} />}
             footer={
               <Receipt
@@ -373,15 +374,15 @@ function LegendDot({ hex, label }: { hex: string; label: string }): ReactElement
 function ReconcileChip({ reconciles, delta }: { reconciles: boolean; delta: number }): ReactElement {
   if (reconciles) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md border border-ok/60 bg-ok/15 px-2 py-0.5 text-[0.68rem] font-medium text-ok-ink">
+      <span className="inline-flex items-center gap-1 rounded-md border border-ok/60 bg-ok/15 px-2 py-0.5 text-[0.6875rem] font-medium text-ok-ink">
         <Check className="size-3 shrink-0" aria-hidden /> Adds up to the total
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-risk/60 bg-risk/15 px-2 py-0.5 text-[0.68rem] font-medium text-risk-ink">
+    <span className="inline-flex items-center gap-1 rounded-md border border-risk/60 bg-risk/15 px-2 py-0.5 text-[0.6875rem] font-medium text-risk-ink">
       <TriangleAlert className="size-3 shrink-0" aria-hidden />{' '}
-      <Figure className="text-[0.68rem] leading-4">{formatUsdAuto(Math.abs(delta))}</Figure>{' '}
+      <Figure className="text-[0.6875rem] leading-4">{formatUsdAuto(Math.abs(delta))}</Figure>{' '}
       unattributed
     </span>
   )

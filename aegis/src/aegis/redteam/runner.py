@@ -38,7 +38,12 @@ from dataclasses import dataclass, field
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import GuardResult, GuardVerdict
-from aegis.guardrails import check_input, check_output, check_tool_result
+from aegis.guardrails import (
+    check_input,
+    check_memory_write,
+    check_output,
+    check_tool_result,
+)
 from aegis.guardrails.pipeline import INJECTION_UNAVAILABLE_LAYER
 from aegis.redteam.battery import (
     ATTACK_BATTERY,
@@ -89,6 +94,9 @@ _MODEL_LAYERS_PER_STAGE: dict[Stage, int] = {
     Stage.INGEST: 0,
     # So is the per-principal query-pattern monitor: a hash and a walk over a deque.
     Stage.SEQUENCE: 0,
+    # The memory-write rail is the inbound chain over a candidate fact, so it costs
+    # what the inbound chain costs.
+    Stage.MEMORY_WRITE: 3,
 }
 
 #: The tenant and principal a battery burst is attributed to. Synthetic, and named
@@ -224,6 +232,7 @@ class Rails:
     check_tool_result: InputChecker
     check_ingest: InputChecker
     check_sequence: InputChecker
+    check_memory_write: InputChecker
 
     def for_stage(self, stage: Stage) -> InputChecker:
         """Return the checker that screens ``stage``."""
@@ -235,6 +244,8 @@ class Rails:
             return self.check_ingest
         if stage is Stage.SEQUENCE:
             return self.check_sequence
+        if stage is Stage.MEMORY_WRITE:
+            return self.check_memory_write
         return self.check_input
 
     @classmethod
@@ -252,6 +263,7 @@ class Rails:
             check_tool_result=check,
             check_ingest=check,
             check_sequence=check,
+            check_memory_write=check,
         )
 
 
@@ -262,6 +274,7 @@ DEFAULT_RAILS = Rails(
     check_tool_result=check_tool_result,
     check_ingest=check_ingest,
     check_sequence=check_sequence,
+    check_memory_write=check_memory_write,
 )
 
 

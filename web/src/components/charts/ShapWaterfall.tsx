@@ -78,7 +78,7 @@ export function ShapWaterfall({
           />
           SHAP · why this prediction
         </span>
-        <Figure className="text-[0.66rem] leading-4 text-muted-foreground">
+        <Figure className="text-[0.6875rem] leading-4 text-muted-foreground">
           base {fmt(base, unit)}
         </Figure>
       </div>
@@ -100,7 +100,7 @@ export function ShapWaterfall({
                 >
                   {step.feature}
                 </span>
-                <Figure className="shrink-0 text-[0.62rem] leading-4 text-muted-foreground">
+                <Figure className="shrink-0 text-[0.6875rem] leading-4 text-muted-foreground">
                   {fmt(step.value)}
                 </Figure>
               </div>
@@ -133,7 +133,7 @@ export function ShapWaterfall({
         <div className="flex items-center gap-2">
           <span className="eyebrow text-foreground">prediction</span>
           {hidden > 0 && (
-            <Figure className="text-[0.62rem] leading-4 text-muted-foreground">
+            <Figure className="text-[0.6875rem] leading-4 text-muted-foreground">
               +{hidden} more driver{hidden > 1 ? 's' : ''}
             </Figure>
           )}

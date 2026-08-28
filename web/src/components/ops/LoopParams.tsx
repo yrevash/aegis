@@ -24,7 +24,7 @@ function TermChips({
   return (
     <div className="flex flex-wrap gap-1.5">
       {terms.map((t) => (
-        <Badge key={t} tone={tone} className="font-mono text-[0.62rem]">
+        <Badge key={t} tone={tone} className="font-mono text-[0.6875rem]">
           {t}
         </Badge>
       ))}

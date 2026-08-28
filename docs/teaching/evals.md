@@ -99,7 +99,9 @@ exists to enforce.
 
 - **The lexical proxies are proxies, not the RAGAS library itself** — they
   are described as "RAGAS-style," a deterministic approximation of that
-  family of metrics, not a dependency on the actual RAGAS package.
+  family of metrics. The real RAGAS package IS a dependency and runs the live
+  metrics (`aegis.evals.libs.ragas_suite`); the offline proxies here deliberately do not
+  use it, so this gate stays free and network-free.
 - **The judge is off by default** — a deployment relying only on the
   deterministic metrics never sees the richer model-graded assessment
   unless it explicitly wires a completer in.
